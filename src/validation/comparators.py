@@ -100,7 +100,7 @@ class Validator:
         self,
         metric: str,
         python_value: float,
-        r_value: float
+        r_value: float,
         tolerance: float
     ) -> ComparisonResult:
         """
@@ -141,9 +141,9 @@ class Validator:
         # Check absolute threshold
         if difference < self.config.min_absolute_threshold:
             # Small absolute differences are OK even if percent is high
-            pass
+            is_within_tolerance = True
         else:
-            pass = within_tolerance
+            is_within_tolerance = within_tolerance
 
         return ComparisonResult(
             metric=metric,
@@ -151,7 +151,7 @@ class Validator:
             r_value=r_value,
             difference=difference,
             percent_difference=percent_difference,
-            within_tolerance=pass,
+            within_tolerance=is_within_tolerance,
             tolerance_level=tolerance_level
         )
 

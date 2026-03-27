@@ -51,8 +51,8 @@ def present_value(
 
 def present_value_series(
     rate: float,
-    growth_rate: float = 0.0,
     payments: np.ndarray,
+    growth_rate: float = 0.0,
     timing: int = 1
 ) -> np.ndarray:
     """
@@ -225,9 +225,9 @@ def amortization_payment(
 
 def funding_period(
     rate: float,
-    growth_rate: float = 0.0,
     principal: float,
     payment: float,
+    growth_rate: float = 0.0,
     timing: int = 1
 ) -> float:
     """

@@ -398,3 +398,128 @@ git commit -m "Initial commit: R model baseline"
 - **Winklevoss Text:** `actuarial_calculations/Winklevoss - 1993 - Pension mathematics with numerical illustrations.pdf`
 - **Main R Script:** `R_model/R_model_original/Florida FRS master.R`
 - **Baseline Call:** `baseline_funding <- get_funding_data()` (line 50, commented out)
+
+---
+
+## Colleague Feedback: Data Quality & Architecture Issues
+
+**Source:** External review of FRS model architecture
+
+### Critical Data Quality Issues in pendata
+
+1. **Benefit Rules Missing Tier 3 Entries**
+   - All 7 classes missing tier_3 benefit rules
+   - Need to extract correct multipliers from AV source documents
+   - Validate against legacy `ben_mult_lookup`
+
+2. **Incomplete Tier 2 Benefit Rules**
+   - Regular class: Needs graded multipliers (0.0160, 0.0163, 0.0165, 0.0168)
+   - Admin class: Incorrect 0.03 value, needs graded multipliers
+   - Special class: Missing 0.02 multiplier for pre-1975 distribution years
+
+3. **Salary Growth Rate Transcription Error**
+   - yos=7, regular class: 4.4% should be 4.5%
+   - Affects benefit calculations
+
+4. **Class Name Inconsistency**
+   - `amortization_bases` uses "senior management" (space)
+   - Should use "senior_management" (underscore) for consistency
+
+5. **Dollar Unit Convention Mismatch**
+   - Some tables use thousands, others use actual dollars
+   - Need universal convention (actual dollars recommended)
+   - Affects `retirees$benefits` and other tables
+
+### Architectural Issues
+
+1. **Dual Data Structures in pendata**
+   - Legacy format: 329-row tables, minimal metadata (what current model expects)
+   - Better structures: 847+ rows, rich metadata, self-documenting
+   - Adapter functions needed to convert better → legacy
+
+2. **FRS-Specific Logic Mixed with General Actuarial Logic**
+   - Hardcoded FRS assumptions throughout model functions
+   - Class-specific logic not abstracted
+   - Tier-specific calculations embedded everywhere
+
+3. **Band-to-Single-Year Conversion**
+   - Currently embedded in adapter functions
+   - Should be in pendata processing pipeline
+   - Affects age/yos band expansion
+
+4. **Test Baseline Dependencies**
+   - Current tests depend on legacy data errors
+   - Will need baseline updates after data fixes
+
+### Generalization Barriers
+
+1. **Hardcoded Plan Parameters**
+   - FRS-specific assumptions in functions
+   - Need configuration layer for plan-specific rules
+
+2. **Data Format Assumptions**
+   - Age/yos granularity assumptions
+   - Band vs single-year data format
+
+### Recommendations for Python Migration
+
+1. **Address Data Quality First**
+   - Fix tier_2 and tier_3 benefit rules before migration
+   - Standardize dollar units to actual dollars
+   - Fix class name consistency
+
+2. **Design for Multi-Plan from Start**
+   - Abstract FRS-specific logic to configuration
+   - Create plan adapter framework
+   - Separate general actuarial calculations from plan-specific rules
+
+3. **Direct Consumption of Better Data Structures**
+   - Don't replicate legacy format in Python
+   - Design Python model to consume rich, self-documenting structures
+   - Handle band-to-single-year conversion in data loading layer
+
+4. **Plan Configuration Schema**
+   - Define data requirements per plan
+   - Create plan registry
+   - Implement plan-aware data loading
+
+### Success Metrics
+
+1. **Data Quality**: All pendata issues resolved, consistent unit conventions
+2. **Architecture**: No adapter functions, direct consumption of better structures
+3. **Generalization**: Model runs with at least 2 different pension plans
+4. **Performance**: No regression in computation time
+5. **Reliability**: All tests pass with corrected data baselines
+
+### Target Architecture
+
+```
+AV Source Documents → pendata Processing Pipeline → Better Data Structures
+                                                                    ↓
+                                                    Plan Configuration Layer
+                                                                    ↓
+                                                    General Pension Model
+                                                                    ↓
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                    Plan-Specific Layer                                │
+    │  ┌──────────────┐  ┌────────────────────┐  ┌──────────────────┐  │
+    │  │ FRS Adapter  │  │ Other Plan Adapter │  │ Future Plans...  │  │
+    │  └──────────────┘  └────────────────────┘  └──────────────────┘  │
+    └─────────────────────────────────────────────────────────────────────────┘
+                                                                    ↓
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                   General Actuarial Layer                             │
+    │  ┌──────────────┐  ┌────────────────────┐  ┌──────────────────┐  │
+    │  │ Core Calculations │  │ pentools Library  │  │ Validation       │  │
+    │  └──────────────┘  └────────────────────┘  └──────────────────┘  │
+    └─────────────────────────────────────────────────────────────────────────┘
+                                                                    ↓
+                                                    Results & Reports
+```
+
+### Implementation Notes for Python Migration
+
+- **Phase 1**: Fix pendata data quality issues (tier_2/3 benefit rules, salary growth, naming)
+- **Phase 2**: Design Python model to consume better structures directly
+- **Phase 3**: Implement plan adapter framework with FRS as first plan
+- **Phase 4**: Test with second plan to validate generalization
