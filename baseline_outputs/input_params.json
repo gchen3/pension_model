@@ -13,6 +13,7 @@
   "cola_current_retire": [0.03],
   "cola_current_retire_one": [0],
   "one_time_cola": [false],
+  "retire_refund_ratio": [1],
   "regular_er_dc_cont_rate": [0.066],
   "special_er_dc_cont_rate": [0.1654],
   "admin_er_dc_cont_rate": [0.0843],

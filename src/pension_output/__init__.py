@@ -1,16 +1,21 @@
 """
-pension_output module
+Pension Output Module
 
-Output generation and formatting for pension modeling.
+Output generation and export functionality for pension model results.
 
-This module handles generating output tables, summary statistics,
-and exporting results to various formats.
+This module provides:
+- Output generators for summaries and detailed tables
+- Export to CSV, Excel, and JSON formats
 """
 
-from pension_output import tables, summaries, export
+from .generators import (
+    OutputGenerator,
+    OutputConfig,
+    generate_outputs
+)
 
 __all__ = [
-    "tables",
-    "summaries",
-    "export",
+    'OutputGenerator',
+    'OutputConfig',
+    'generate_outputs'
 ]

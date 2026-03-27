@@ -15,7 +15,7 @@
 The existing R model has significant issues:
 - **Global variables everywhere** - Makes testing and debugging difficult
 - **Hard-coded numbers** - Not configurable, plan-specific values embedded in code
-- **Poor memory usage** - Inefficient data structures
+- **Poor memory usage** - Inefficient data structures, keeps everything in memory
 - **Slow performance** - Not optimized for speed
 - **Plan-specific** - Tied to Florida FRS, not generalizable
 
@@ -26,12 +26,14 @@ The existing R model has significant issues:
 4. **Testability** - Each component validated against R model outputs
 5. **Performance** - Significant speed improvement over R implementation
 6. **Maintainability** - Well-documented code following best practices
+7. **Memory Efficiency** - Stream data processing, don't keep everything in memory
 
 ### Success Criteria
 - **Accuracy:** Python model matches R model results within tolerance (<0.1% difference)
 - **Performance:** Significant speed improvement over R implementation
 - **Maintainability:** Clean, documented code with no global state
 - **Flexibility:** Can model different pension plans by changing config files
+- **Memory Efficiency:** Stream data year-by-year, don't keep historical data in memory
 
 ---
 
@@ -39,7 +41,12 @@ The existing R model has significant issues:
 
 ### Module Structure
 
-**IMPORTANT:** This architecture follows Python best practices and is NOT tied to the R project structure. The design is de novo, using modern Python patterns.
+**DESIGN PHILOSOPHY:**
+- Use **long format** (one row = one entity) for core calculation data
+- Use **wide format** only for input/reference tables (salary schedules, mortality tables)
+- Store only what's needed for calculations, not historical data
+- Stream data year by year, discard intermediate results
+- Most memory efficient
 
 ```
 pension_model/
@@ -47,8 +54,8 @@ pension_model/
 │   ├── pension_data/          # Data ingestion and standardization
 │   │   ├── __init__.py
 │   │   ├── loaders.py         # Excel/CSV data loading
-│   │   ├── transformers.py    # Transform raw data to standard format
-│   │   └── schemas.py         # Pydantic models for validation
+│   │   ├── schemas.py         # Pydantic models for validation
+│   │   └── config.py         # Configuration loading
 │   │
 │   ├── pension_tools/         # Actuarial functions (pure functions, no state)
 │   │   ├── __init__.py
@@ -76,11 +83,13 @@ pension_model/
 │   │   ├── funding.py         # Funding/amortization calculations
 │   │   └── cola.py            # COLA calculations
 │   │
-│   └── pension_output/        # Output generation and formatting
-│       ├── __init__.py
-│       ├── tables.py          # Generate output tables
-│       ├── summaries.py       # Generate summary statistics
-│       └── export.py          # Export to various formats
+│   ├── pension_output/        # Output generation and formatting
+│   │   ├── __init__.py
+│   │   ├── tables.py          # Generate output tables
+│   │   ├── summaries.py       # Generate summary statistics
+│   │   └── export.py          # Export to various formats
+│   │
+│   └── __init__.py         # Package initialization
 │
 ├── configs/               # JSON configuration files
 │   ├── plan_config.json   # Plan parameters
@@ -99,6 +108,7 @@ pension_model/
 │   └── extract_baseline.R # R baseline extraction
 │
 ├── baseline_outputs/       # R model outputs for comparison
+├── memory-bank/           # Project documentation
 ├── pyproject.toml         # Python project configuration
 ├── .gitignore
 └── README.md
@@ -113,7 +123,61 @@ pension_model/
 5. **Generalizable** - Designed to handle multiple pension plans, not just Florida FRS
 6. **Type Hints** - All functions use Python type hints for better IDE support
 7. **Dataclasses/Pydantic** - Structured data models for complex objects
-8. **Python Best Practices** - Following PEP 8, using modern Python patterns
+8. **Memory Efficient** - Stream data year-by-year, discard intermediate results
+9. **Long Format for Core Data** - One row per entity for calculations
+10. **Wide Format for Reference Data** - Input tables kept in wide format
+
+---
+
+## Data Structure Design
+
+### Core Philosophy
+
+**Problem:** R model keeps EVERYTHING in memory - all years, all classes, all arrays. This is:
+- Memory intensive
+- Unnecessary for year-by-year calculations
+- Not generalizable (hard-coded structure)
+
+**Solution:** Stream data year-by-year, keeping only what's needed
+
+### Data Formats
+
+| Data Type | Format | Rationale |
+|------------|--------|-----------|
+| Input/Reference Tables | Wide (multi-column) | These are lookup tables, not calculation results. Keep as reference. |
+| Salary Schedules | Wide | Used for salary growth calculations. |
+| Mortality Tables | Wide | Used for qx lookups. |
+| Withdrawal Tables | Wide | Used for rate lookups. |
+| Retirement Tables | Wide | Used for eligibility/factor lookups. |
+| **Workforce Projections** | **Long** | One row = one entity (member in year). Most memory efficient. |
+| **Benefit Valuations** | **Long** | One row = one valuation. Discard after use. |
+| **Liability Results** | **Long** | One row = one year's results. Discard after use. |
+| **Funding Results** | **Long** | One row = one year's results. Discard after use. |
+
+### Entity IDs
+
+**Long Format Design:**
+- `membership_class` - Enum (REGULAR, SPECIAL_RISK, etc.)
+- `tier` - Enum (TIER_1, TIER_2, TIER_3)
+- `entry_age` - Age when member entered plan
+- `current_age` - Current age in projection year
+- `yos` - Years of service
+- `year` - Projection year
+
+**Example Long Format Record:**
+```python
+{
+    "membership_class": "regular",
+    "tier": "tier_1",
+    "entry_age": 25,
+    "current_age": 30,
+    "yos": 5,
+    "year": 2025,
+    "active": 1000,
+    "termination": 50,
+    "retirement": 10
+}
+```
 
 ---
 
@@ -121,14 +185,12 @@ pension_model/
 
 ```mermaid
 graph TD
-    A[Raw Excel Inputs] --> B[pension_data]
-    B -->|Standardized Data| C[pension_config]
-    D[JSON Configs] --> C
-    C -->|Validated Config| E[pension_model]
-    B -->|Standardized Data| E
-    E -->|Calls| F[pension_tools]
-    F -->|Returns| E
-    E -->|Results| G[pension_output]
+    A[Raw Excel Inputs] --> B[pension_data: Loaders]
+    B -->|Wide Format| C[pension_data: Schemas]
+    C -->|Long Format| D[pension_config: Config]
+    D -->|Validated Config| E[pension_model: Engine]
+    E -->|Year-by-Year| F[pension_tools: Functions]
+    F -->|Results| G[pension_output: Tables]
     G --> H[Output Files]
 ```
 
@@ -140,8 +202,8 @@ graph TD
 - [x] Initialize git repository
 - [x] Set up Python project structure (pyproject.toml, src layout)
 - [x] Configure development tools (pytest, black, mypy, ruff)
-- [ ] Create directory structure
-- [ ] Set up pre-commit hooks
+- [x] Create directory structure
+- [x] Set up pre-commit hooks
 
 ### Phase 1: R Baseline Extraction
 - [x] Create R script to run baseline case and capture all intermediate outputs
@@ -151,17 +213,17 @@ graph TD
 - [ ] Create test fixtures from R outputs
 
 ### Phase 2: Configuration Module (pension_config)
-- [ ] Design JSON schema for plan configuration
-- [ ] Create Pydantic models for validation
+- [x] Design JSON schema for plan configuration
+- [x] Create Pydantic models for validation
 - [ ] Implement config_loader with validation
 - [ ] Create config files for Florida FRS (from R inputs)
 - [ ] Add scenario management
 
 ### Phase 3: Data Module (pension_data)
-- [ ] Extract and document R model input data structures
-- [ ] Create Pydantic schemas for all data types
-- [ ] Implement excel_loader for all input files
-- [ ] Implement data_transformer to standardize formats
+- [x] Extract and document R model input data structures
+- [x] Create Pydantic schemas for all data types
+- [x] Implement excel_loader for all input files
+- [x] Implement data_transformer to standardize formats
 - [ ] **Validate: Row counts and basic statistics match R**
 
 ### Phase 4: Tools Module (pension_tools)
@@ -210,8 +272,7 @@ graph TD
 | `Florida FRS liability model.R` | Liability projections | **5** |
 | `Florida FRS funding model.R` | Funding calculations | **6** |
 
-### Membership Classes
-The R model handles 7 membership classes:
+### Membership Classes (7 total)
 1. Regular
 2. Special Risk
 3. Special Risk Administrative
@@ -222,10 +283,10 @@ The R model handles 7 membership classes:
 
 ### Key Global Variables (to be catalogued)
 - Discount rates (dr_old_, dr_current_, dr_new_)
-- COLA assumptions (cola_tier_1_active_, etc.)
+- COLA assumptions (cola_tier_1_active_, cola_tier_2_active_, etc.)
 - DB/DC ratios for each class
-- Funding policy parameters
-- Model period and year ranges
+- Funding policy parameters (funding_policy_, amo_period_new_, etc.)
+- Model parameters (model_period_, start_year_, new_year_, etc.)
 
 ---
 
@@ -319,7 +380,7 @@ git commit -m "Initial commit: R model baseline"
 
 ## Next Steps
 
-1. **Complete Python project structure** - Remaining __init__.py files and module files
+1. **Complete Python project structure** - Remaining module files
 2. **Run R baseline extraction** - `Rscript scripts/extract_baseline.R`
 3. **Implement configuration module** - Start with Pydantic schemas
 4. **Implement data module** - Excel loading and transformation

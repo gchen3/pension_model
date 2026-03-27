@@ -1,0 +1,752 @@
+"""
+Benefit Calculation Module
+
+Calculates pension benefits, normal costs, accrued liabilities,
+present value of future benefits (PVFB), and present value of future salaries (PVFS).
+
+Key Design Principles:
+- Stream year-by-year to avoid keeping all years in memory
+- Use long format for core data (one row = one entity)
+- Pure functions for calculation logic
+"""
+
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+import numpy as np
+import pandas as pd
+
+from pension_config.plan import MembershipClass, PlanConfig, Tier
+from pension_data.schemas import (
+    BenefitValuation,
+    MortalityRate,
+    SalaryGrowthRate,
+    RetirementEligibility
+)
+from pension_tools.financial import (
+    present_value,
+    present_value_series,
+    discount_factor
+)
+from pension_tools.salary import (
+    cumulative_salary_growth,
+    projected_salary
+)
+from pension_tools.mortality import complement_of_survival
+from pension_tools.retirement import (
+    is_normal_retirement_eligible,
+    is_early_retirement_eligible,
+    early_retirement_factor
+)
+from pension_tools.benefit import (
+    normal_cost,
+    accrued_liability,
+    pvfb,
+    pvfs
+)
+
+
+@dataclass
+class BenefitCalculation:
+    """Result of a benefit calculation for a single member."""
+    entry_age: int
+    entry_year: int
+    age: int
+    yos: int
+    salary: float
+    benefit: float
+    normal_cost: float
+    accrued_liability: float
+    pvfb: float
+    pvfs: float
+    annuity_factor: float
+    tier: str
+
+
+class BenefitCalculator:
+    """
+    Calculates pension benefits and related actuarial values.
+
+    This module handles:
+    - Benefit calculations (normal, early, vested)
+    - Normal cost and accrued liability
+    - Present value of future benefits (PVFB)
+    - Present value of future salaries (PVFS)
+    - Annuity factors
+    """
+
+    def __init__(self, config: PlanConfig):
+        self.config = config
+        self.start_year = config.start_year
+        self.model_period = config.model_period
+        self.max_age = config.max_age
+
+        # Benefit formulas by class
+        self.benefit_formulas = {
+            MembershipClass.REGULAR: self._regular_benefit,
+            MembershipClass.SPECIAL_RISK: self._special_risk_benefit,
+            MembershipClass.SPECIAL_RISK_ADMIN: self._special_risk_admin_benefit,
+            MembershipClass.JUDICIAL: self._judicial_benefit,
+            MembershipClass.ECO: self._eco_benefit,
+            MembershipClass.ESO: self._eso_benefit,
+            MembershipClass.SENIOR_MANAGEMENT: self._senior_management_benefit
+        }
+
+    def determine_tier(
+        self,
+        class_name: MembershipClass,
+        entry_year: int,
+        age: int,
+        yos: int
+    ) -> str:
+        """
+        Determine which tier a member belongs to based on entry year.
+
+        Args:
+            class_name: Membership class
+            entry_year: Year of entry
+            age: Current age
+            yos: Years of service
+
+        Returns:
+            Tier identifier (e.g., "tier_1_norm", "tier_2_early", etc.)
+        """
+        is_special = class_name in [
+            MembershipClass.SPECIAL_RISK,
+            MembershipClass.SPECIAL_RISK_ADMIN
+        ]
+
+        if entry_year < 2011:
+            # Tier 1
+            if is_special and (yos >= 25 or (age >= 55 and yos >= 6) or (age >= 52 and yos >= 25)):
+                return "tier_1_norm"
+            elif yos >= 30 or (age >= 62 and yos >= 6):
+                return "tier_1_norm"
+            elif is_special and (yos >= 6 and age >= 53):
+                return "tier_1_early"
+            elif yos >= 6 and age >= 58:
+                return "tier_1_early"
+            elif yos >= 6:
+                return "tier_1_vested"
+            else:
+                return "tier_1_non_vested"
+        elif entry_year < self.config.new_hire_year:
+            # Tier 2
+            if is_special and (yos >= 30 or (age >= 60 and yos >= 8)):
+                return "tier_2_norm"
+            elif yos >= 33 or (age >= 65 and yos >= 8):
+                return "tier_2_norm"
+            elif is_special and (yos >= 8 and age >= 56):
+                return "tier_2_early"
+            elif yos >= 8 and age >= 61:
+                return "tier_2_early"
+            elif yos >= 8:
+                return "tier_2_vested"
+            else:
+                return "tier_2_non_vested"
+        else:
+            # Tier 3 (new hires)
+            if is_special and (yos >= 30 or (age >= 60 and yos >= 8)):
+                return "tier_3_norm"
+            elif yos >= 33 or (age >= 65 and yos >= 8):
+                return "tier_3_norm"
+            elif is_special and (yos >= 8 and age >= 56):
+                return "tier_3_early"
+            elif yos >= 8 and age >= 61:
+                return "tier_3_early"
+            elif yos >= 8:
+                return "tier_3_vested"
+            else:
+                return "tier_3_non_vested"
+
+    def get_separation_type(self, tier: str) -> str:
+        """
+        Determine separation type based on tier.
+
+        Args:
+            tier: Tier identifier
+
+        Returns:
+            Separation type: "retire", "vested", or "non_vested"
+        """
+        if "early" in tier or "norm" in tier or "reduced" in tier:
+            return "retire"
+        elif "non_vested" in tier:
+            return "non_vested"
+        elif "vested" in tier:
+            return "vested"
+        else:
+            return "non_vested"
+
+    def calculate_benefit(
+        self,
+        class_name: MembershipClass,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """
+        Calculate annual pension benefit.
+
+        Args:
+            class_name: Membership class
+            tier: Tier identifier
+            salary: Final average salary
+            yos: Years of service
+            age: Age at retirement
+
+        Returns:
+            Annual benefit amount
+        """
+        formula = self.benefit_formulas.get(class_name)
+        if formula is None:
+            raise ValueError(f"Unknown membership class: {class_name}")
+
+        return formula(tier, salary, yos, age)
+
+    def _regular_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for Regular class."""
+        # Benefit formula: 1.6% * YOS * FAS (for tier 1 normal)
+        # Different multipliers for different tiers
+        multipliers = {
+            "tier_1_norm": 0.016,
+            "tier_1_early": 0.016,  # Reduced by early retirement factor
+            "tier_2_norm": 0.016,
+            "tier_2_early": 0.016,
+            "tier_3_norm": 0.016,
+            "tier_3_early": 0.016
+        }
+
+        multiplier = multipliers.get(tier, 0.016)
+        base_benefit = multiplier * yos * salary
+
+        # Apply early retirement reduction if applicable
+        if "early" in tier:
+            reduction = early_retirement_factor(age, yos)
+            base_benefit *= (1 - reduction)
+
+        return base_benefit
+
+    def _special_risk_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for Special Risk class."""
+        # Benefit formula: 3% * YOS * FAS (for tier 1 normal)
+        multipliers = {
+            "tier_1_norm": 0.03,
+            "tier_1_early": 0.03,
+            "tier_2_norm": 0.03,
+            "tier_2_early": 0.03,
+            "tier_3_norm": 0.03,
+            "tier_3_early": 0.03
+        }
+
+        multiplier = multipliers.get(tier, 0.03)
+        base_benefit = multiplier * yos * salary
+
+        # Apply early retirement reduction if applicable
+        if "early" in tier:
+            reduction = early_retirement_factor(age, yos)
+            base_benefit *= (1 - reduction)
+
+        return base_benefit
+
+    def _special_risk_admin_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for Special Risk Administrative class."""
+        # Same as Special Risk
+        return self._special_risk_benefit(tier, salary, yos, age)
+
+    def _judicial_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for Judicial class."""
+        # Benefit formula: 3% * YOS * FAS
+        multipliers = {
+            "tier_1_norm": 0.03,
+            "tier_1_early": 0.03,
+            "tier_2_norm": 0.03,
+            "tier_2_early": 0.03,
+            "tier_3_norm": 0.03,
+            "tier_3_early": 0.03
+        }
+
+        multiplier = multipliers.get(tier, 0.03)
+        base_benefit = multiplier * yos * salary
+
+        # Apply early retirement reduction if applicable
+        if "early" in tier:
+            reduction = early_retirement_factor(age, yos)
+            base_benefit *= (1 - reduction)
+
+        return base_benefit
+
+    def _eco_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for ECO (Elected Constitutional Officers) class."""
+        # Benefit formula: 3% * YOS * FAS
+        multipliers = {
+            "tier_1_norm": 0.03,
+            "tier_1_early": 0.03,
+            "tier_2_norm": 0.03,
+            "tier_2_early": 0.03,
+            "tier_3_norm": 0.03,
+            "tier_3_early": 0.03
+        }
+
+        multiplier = multipliers.get(tier, 0.03)
+        base_benefit = multiplier * yos * salary
+
+        # Apply early retirement reduction if applicable
+        if "early" in tier:
+            reduction = early_retirement_factor(age, yos)
+            base_benefit *= (1 - reduction)
+
+        return base_benefit
+
+    def _eso_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for ESO (Elected State Officers) class."""
+        # Benefit formula: 3% * YOS * FAS
+        return self._eco_benefit(tier, salary, yos, age)
+
+    def _senior_management_benefit(
+        self,
+        tier: str,
+        salary: float,
+        yos: int,
+        age: int
+    ) -> float:
+        """Calculate benefit for Senior Management class."""
+        # Benefit formula: 1.6% * YOS * FAS
+        return self._regular_benefit(tier, salary, yos, age)
+
+    def calculate_annuity_factor(
+        self,
+        age: int,
+        year: int,
+        dist_age: int,
+        dr: float,
+        mort_table: pd.DataFrame,
+        cola_rate: float
+    ) -> float:
+        """
+        Calculate annuity factor for benefit payments.
+
+        Args:
+            age: Current age
+            year: Current year
+            dist_age: Age at distribution (retirement)
+            dr: Discount rate
+            mort_table: Mortality rate table
+            cola_rate: COLA rate for retirees
+
+        Returns:
+            Annuity factor
+        """
+        # Number of years from dist_age to max_age
+        years_to_max = self.max_age - dist_age
+
+        if years_to_max <= 0:
+            return 0.0
+
+        # Create array of ages from dist_age to max_age
+        ages = np.arange(dist_age, self.max_age + 1)
+        years = np.arange(len(ages))
+
+        # Get mortality rates for each age
+        mort_rates = []
+        for i, a in enumerate(ages):
+            # Find mortality rate for this age and year
+            dist_year = year + i
+            match = mort_table[
+                (mort_table['age'] == a) &
+                (mort_table['year'] == dist_year)
+            ]
+            if len(match) > 0:
+                mort_rates.append(match['mort_final'].iloc[0])
+            else:
+                mort_rates.append(0.0)
+
+        mort_rates = np.array(mort_rates)
+
+        # Calculate survival probability for each year
+        # Survive to age t = product of (1 - qx) for all previous ages
+        surv_prob = np.cumprod(1 - mort_rates)
+
+        # Calculate discount factors with COLA
+        # Payment at year t is discounted by (1 + dr)^t and grows by (1 + cola)^t
+        discount_factors = np.array([
+            (1 / ((1 + dr) ** t)) * ((1 + cola_rate) ** t)
+            for t in years
+        ])
+
+        # Annuity factor = sum of survival * discount
+        annuity = np.sum(surv_prob * discount_factors)
+
+        return annuity
+
+    def calculate_pvfb(
+        self,
+        benefit: float,
+        entry_age: int,
+        entry_year: int,
+        current_age: int,
+        current_year: int,
+        dr: float,
+        mort_table: pd.DataFrame,
+        cola_rate: float
+    ) -> float:
+        """
+        Calculate Present Value of Future Benefits (PVFB).
+
+        Args:
+            benefit: Annual benefit amount
+            entry_age: Age at entry
+            entry_year: Year of entry
+            current_age: Current age
+            current_year: Current year
+            dr: Discount rate
+            mort_table: Mortality rate table
+            cola_rate: COLA rate
+
+        Returns:
+            Present value of future benefits
+        """
+        # Years from current age to retirement age
+        # For simplicity, assume retirement at max_age
+        years_to_retirement = self.max_age - current_age
+
+        if years_to_retirement <= 0:
+            return 0.0
+
+        # Calculate annuity factor at retirement
+        annuity = self.calculate_annuity_factor(
+            current_age, current_year, self.max_age, dr, mort_table, cola_rate
+        )
+
+        # Calculate survival probability from current age to retirement
+        yos = current_age - entry_age
+        years = np.arange(years_to_retirement)
+
+        # Get mortality rates
+        mort_rates = []
+        for i, t in enumerate(years):
+            age = current_age + t
+            year = current_year + t
+            match = mort_table[
+                (mort_table['entry_age'] == entry_age) &
+                (mort_table['age'] == age) &
+                (mort_table['year'] == year) &
+                (mort_table['yos'] == yos + t)
+            ]
+            if len(match) > 0:
+                mort_rates.append(match['mort_final'].iloc[0])
+            else:
+                mort_rates.append(0.0)
+
+        mort_rates = np.array(mort_rates)
+        surv_to_retirement = np.prod(1 - mort_rates)
+
+        # Discount to present
+        discount = 1 / ((1 + dr) ** years_to_retirement)
+
+        # PVFB = Benefit * Annuity * Survival * Discount
+        return benefit * annuity * surv_to_retirement * discount
+
+    def calculate_pvfs(
+        self,
+        salary: float,
+        entry_age: int,
+        current_age: int,
+        current_year: int,
+        salary_growth_table: pd.DataFrame,
+        dr: float
+    ) -> float:
+        """
+        Calculate Present Value of Future Salaries (PVFS).
+
+        Args:
+            salary: Current salary
+            entry_age: Age at entry
+            current_age: Current age
+            current_year: Current year
+            salary_growth_table: Salary growth rate table
+            dr: Discount rate
+
+        Returns:
+            Present value of future salaries
+        """
+        # Years to retirement
+        years_to_retirement = self.max_age - current_age
+
+        if years_to_retirement <= 0:
+            return 0.0
+
+        # Get salary growth rates
+        growth_rates = []
+        for t in range(years_to_retirement):
+            age = current_age + t
+            yos = age - entry_age
+            match = salary_growth_table[
+                (salary_growth_table['yos'] == yos)
+            ]
+            if len(match) > 0:
+                growth_rates.append(match['salary_increase'].iloc[0])
+            else:
+                growth_rates.append(0.0)
+
+        growth_rates = np.array(growth_rates)
+
+        # Calculate cumulative growth
+        cum_growth = np.cumprod(1 + growth_rates)
+
+        # Projected salaries
+        projected_salaries = salary * cum_growth
+
+        # Discount factors
+        discount_factors = np.array([1 / ((1 + dr) ** t) for t in range(years_to_retirement)])
+
+        # PVFS = sum of (projected salary * discount)
+        return np.sum(projected_salaries * discount_factors)
+
+    def calculate_normal_cost(
+        self,
+        benefit: float,
+        pvfb: float,
+        pvfs: float
+    ) -> float:
+        """
+        Calculate Normal Cost (NC).
+
+        Args:
+            benefit: Annual benefit
+            pvfb: Present value of future benefits
+            pvfs: Present value of future salaries
+
+        Returns:
+            Normal cost rate
+        """
+        if pvfs == 0:
+            return 0.0
+
+        # NC = PVFB / PVFS * Salary
+        # Or as a rate: NC_rate = PVFB / PVFS
+        return pvfb / pvfs
+
+    def calculate_accrued_liability(
+        self,
+        benefit: float,
+        entry_age: int,
+        current_age: int,
+        current_year: int,
+        dr: float,
+        mort_table: pd.DataFrame,
+        cola_rate: float
+    ) -> float:
+        """
+        Calculate Accrued Liability (AL).
+
+        Args:
+            benefit: Annual benefit
+            entry_age: Age at entry
+            current_age: Current age
+            current_year: Current year
+            dr: Discount rate
+            mort_table: Mortality rate table
+            cola_rate: COLA rate
+
+        Returns:
+            Accrued liability
+        """
+        # Calculate PVFB at current age
+        pvfb_current = self.calculate_pvfb(
+            benefit, entry_age, entry_year, current_age, current_year,
+            dr, mort_table, cola_rate
+        )
+
+        # Calculate PVFB at entry age
+        pvfb_entry = self.calculate_pvfb(
+            benefit, entry_age, entry_year, entry_age, entry_year,
+            dr, mort_table, cola_rate
+        )
+
+        # AL = PVFB_current - PVFB_entry * (1 - accrued_fraction)
+        # For simplicity, use proportional accrual
+        yos = current_age - entry_age
+        total_yos = self.max_age - entry_age
+        accrued_fraction = yos / total_yos if total_yos > 0 else 0
+
+        return pvfb_current * accrued_fraction
+
+    def calculate_benefit_for_member(
+        self,
+        class_name: MembershipClass,
+        entry_age: int,
+        entry_year: int,
+        age: int,
+        salary: float,
+        dr: float,
+        mort_table: pd.DataFrame,
+        salary_growth_table: pd.DataFrame,
+        cola_rate_active: float,
+        cola_rate_retire: float
+    ) -> BenefitCalculation:
+        """
+        Calculate all benefit values for a single member.
+
+        Args:
+            class_name: Membership class
+            entry_age: Age at entry
+            entry_year: Year of entry
+            age: Current age
+            salary: Current salary
+            dr: Discount rate
+            mort_table: Mortality rate table
+            salary_growth_table: Salary growth rate table
+            cola_rate_active: COLA rate for active members
+            cola_rate_retire: COLA rate for retirees
+
+        Returns:
+            BenefitCalculation with all values
+        """
+        yos = age - entry_age
+        current_year = entry_year + yos
+
+        # Determine tier
+        tier = self.determine_tier(class_name, entry_year, age, yos)
+
+        # Calculate benefit
+        benefit = self.calculate_benefit(class_name, tier, salary, yos, age)
+
+        # Calculate annuity factor
+        annuity = self.calculate_annuity_factor(
+            age, current_year, age, dr, mort_table, cola_rate_retire
+        )
+
+        # Calculate PVFB
+        pvfb_val = self.calculate_pvfb(
+            benefit, entry_age, entry_year, age, current_year,
+            dr, mort_table, cola_rate_retire
+        )
+
+        # Calculate PVFS
+        pvfs_val = self.calculate_pvfs(
+            salary, entry_age, age, current_year, salary_growth_table, dr
+        )
+
+        # Calculate normal cost
+        nc = self.calculate_normal_cost(benefit, pvfb_val, pvfs_val)
+
+        # Calculate accrued liability
+        al = self.calculate_accrued_liability(
+            benefit, entry_age, age, current_year, dr, mort_table, cola_rate_retire
+        )
+
+        return BenefitCalculation(
+            entry_age=entry_age,
+            entry_year=entry_year,
+            age=age,
+            yos=yos,
+            salary=salary,
+            benefit=benefit,
+            normal_cost=nc,
+            accrued_liability=al,
+            pvfb=pvfb_val,
+            pvfs=pvfs_val,
+            annuity_factor=annuity,
+            tier=tier
+        )
+
+
+def calculate_benefit_table(
+    config: PlanConfig,
+    class_name: MembershipClass,
+    salary_headcount: pd.DataFrame,
+    mort_table: pd.DataFrame,
+    salary_growth_table: pd.DataFrame,
+    dr_current: float,
+    dr_new: float,
+    cola_rate_active: float,
+    cola_rate_retire: float
+) -> pd.DataFrame:
+    """
+    Calculate benefit table for all members in a class.
+
+    Args:
+        config: Plan configuration
+        class_name: Membership class
+        salary_headcount: Salary/headcount data
+        mort_table: Mortality rate table
+        salary_growth_table: Salary growth rate table
+        dr_current: Current discount rate
+        dr_new: New discount rate
+        cola_rate_active: COLA rate for active members
+        cola_rate_retire: COLA rate for retirees
+
+    Returns:
+        DataFrame with benefit calculations for all members
+    """
+    calculator = BenefitCalculator(config)
+
+    results = []
+
+    for _, row in salary_headcount.iterrows():
+        entry_age = row['entry_age']
+        entry_year = row['entry_year']
+        age = row['age']
+        salary = row['entry_salary'] * row.get('cumprod_salary_increase', 1.0)
+
+        # Use appropriate discount rate based on entry year
+        dr = dr_new if entry_year >= config.new_hire_year else dr_current
+
+        calc = calculator.calculate_benefit_for_member(
+            class_name, entry_age, entry_year, age, salary, dr,
+            mort_table, salary_growth_table, cola_rate_active, cola_rate_retire
+        )
+
+        results.append({
+            'entry_age': calc.entry_age,
+            'entry_year': calc.entry_year,
+            'age': calc.age,
+            'yos': calc.yos,
+            'salary': calc.salary,
+            'benefit': calc.benefit,
+            'normal_cost': calc.normal_cost,
+            'accrued_liability': calc.accrued_liability,
+            'pvfb': calc.pvfb,
+            'pvfs': calc.pvfs,
+            'annuity_factor': calc.annuity_factor,
+            'tier': calc.tier
+        })
+
+    return pd.DataFrame(results)

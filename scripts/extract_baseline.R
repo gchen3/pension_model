@@ -1,8 +1,8 @@
 #################################################################
-##      R Baseline Extraction Script for Python Comparison     ##
+##                   R Baseline Extraction Script for Python Comparison     ##
 #################################################################
-# This script runs the Florida FRS R model and captures all
-# intermediate outputs for comparison with the Python implementation.
+# This script runs the Florida FRS R model and captures all intermediate
+# outputs for comparison with the Python implementation.
 #
 # Outputs are saved to baseline_outputs/ directory as CSV and JSON files.
 #################################################################
@@ -13,6 +13,7 @@ setwd("R_model/R_model_original")
 # Create output directory
 if (!dir.exists("../../baseline_outputs")) {
   dir.create("../../baseline_outputs")
+  cat("Created baseline_outputs/ directory\n")
 }
 
 # Load required libraries
@@ -27,10 +28,37 @@ library(rio)
 library(parallel)
 library(jsonlite)
 
-# Source R model components
+# Get actuarial and financial functions
 source("utility_functions.R")
+
+# Get model inputs and assumptions
 source("Florida FRS model input.R")
+
+# Get benefit data and model
 source("Florida FRS benefit model.R")
+
+# Get workforce data (run this model only when workforce data is updated, otherwise use the rds files)
+source("Florida FRS workforce model.R")
+get_wf_data(class_name = "regular")
+get_wf_data(class_name = "special")
+get_wf_data(class_name = "admin")
+get_wf_data(class_name = "eco")
+get_wf_data(class_name = "eso")
+get_wf_data(class_name = "judges")
+get_wf_data(class_name = "senior management")
+
+# Get liability model
+regular_wf_data <- readRDS("regular_wf_data.rds")
+special_wf_data <- readRDS("special_wf_data.rds")
+admin_wf_data <- readRDS("admin_wf_data.rds")
+eco_wf_data <- readRDS("eco_wf_data.rds")
+eso_wf_data <- readRDS("eso_wf_data.rds")
+judges_wf_data <- readRDS("judges_wf_data.rds")
+senior_management_wf_data <- readRDS("senior_management_wf_data.rds")
+source("Florida FRS liability model.R")
+
+# Get funding model
+source("Florida FRS funding model.R")
 
 #################################################################
 ##                   Capture Input Data                         ##
@@ -38,7 +66,7 @@ source("Florida FRS benefit model.R")
 
 cat("Capturing input data...\n")
 
-# Save input parameters
+# Save input parameters as JSON
 input_params <- list(
   # Actuarial and economic assumptions
   dr_old = dr_old_,
@@ -57,6 +85,7 @@ input_params <- list(
   cola_current_retire = cola_current_retire_,
   cola_current_retire_one = cola_current_retire_one_,
   one_time_cola = one_time_cola_,
+  retire_refund_ratio = retire_refund_ratio_,
 
   # DC Employer contributions
   regular_er_dc_cont_rate = regular_er_dc_cont_rate_,
@@ -116,45 +145,197 @@ input_params <- list(
 
 write_json(input_params, "../../baseline_outputs/input_params.json", pretty = TRUE)
 
-# Save salary growth table
+#################################################################
+##                   Capture Salary Growth Table                 ##
+#################################################################
+
+cat("Capturing salary growth table...\n")
+
+# Salary growth table is already in salary_growth_table_ variable
+# Save it as CSV
 write_csv(salary_growth_table_, "../../baseline_outputs/salary_growth_table.csv")
 
-# Save mortality tables
-write_csv(pub_2010_headcount_mort_rates_, "../../baseline_outputs/pub_2010_headcount_mort_rates.csv")
-write_csv(mortality_improvement_scale_mp_2018_rates_, "../../baseline_outputs/mortality_improvement_scale_mp_2018_rates.csv")
+cat("Salary growth table captured.\n")
 
-# Save withdrawal rate tables
-for (class in c("admin", "eco", "eso", "judges", "senior_management", "special")) {
-  for (gender in c("male", "female")) {
-    var_name <- paste0(class, "_withdrawal_rate_", gender, "_")
-    if (exists(var_name)) {
-      write_csv(get(var_name), paste0("../../baseline_outputs/", class, "_withdrawal_rate_", gender, ".csv"))
-    }
-  }
+#################################################################
+##                   Capture Mortality Tables                 ##
+#################################################################
+
+cat("Capturing mortality tables...\n")
+
+# Save mortality tables for each class
+if (exists("regular_mort_table")) {
+  write_csv(regular_mort_table, "../../baseline_outputs/regular_mortality_rates.csv")
+  cat("Saved regular mortality table\n")
+}
+if (exists("special_mort_table")) {
+  write_csv(special_mort_table, "../../baseline_outputs/special_mortality_rates.csv")
+  cat("Saved special mortality table\n")
+}
+if (exists("admin_mort_table")) {
+  write_csv(admin_mort_table, "../../baseline_outputs/admin_mortality_rates.csv")
+  cat("Saved admin mortality table\n")
+}
+if (exists("eco_mort_table")) {
+  write_csv(eco_mort_table, "../../baseline_outputs/eco_mortality_rates.csv")
+  cat("Saved eco mortality table\n")
+}
+if (exists("eso_mort_table")) {
+  write_csv(eso_mort_table, "../../baseline_outputs/eso_mortality_rates.csv")
+  cat("Saved eso mortality table\n")
+}
+if (exists("judges_mort_table")) {
+  write_csv(judges_mort_table, "../../baseline_outputs/judges_mortality_rates.csv")
+  cat("Saved judges mortality table\n")
+}
+if (exists("senior_management_mort_table")) {
+  write_csv(senior_management_mort_table, "../../baseline_outputs/senior_management_mortality_rates.csv")
+  cat("Saved senior_management mortality table\n")
 }
 
-# Save retirement tables
-for (tier in c(1, 2)) {
-  write_csv(get(paste0("normal_retirement_tier_", tier, "_")),
-             paste0("../../baseline_outputs/normal_retirement_tier_", tier, ".csv"))
-  write_csv(get(paste0("early_retirement_tier_", tier, "_")),
-             paste0("../../baseline_outputs/early_retirement_tier_", tier, ".csv"))
+cat("Mortality tables captured.\n")
+
+#################################################################
+##                   Capture Withdrawal Rate Tables                 ##
+#################################################################
+
+cat("Capturing withdrawal rate tables...\n")
+
+# Save withdrawal rate tables for each class
+if (exists("regular_withdrawal_rate_table")) {
+  write_csv(regular_withdrawal_rate_table, "../../baseline_outputs/regular_withdrawal_rates.csv")
+  cat("Saved regular withdrawal rate table\n")
+}
+if (exists("special_withdrawal_rate_table")) {
+  write_csv(special_withdrawal_rate_table, "../../baseline_outputs/special_withdrawal_rates.csv")
+  cat("Saved special withdrawal rate table\n")
+}
+if (exists("admin_withdrawal_rate_table")) {
+  write_csv(admin_withdrawal_rate_table, "../../baseline_outputs/admin_withdrawal_rates.csv")
+  cat("Saved admin withdrawal rate table\n")
+}
+if (exists("eco_withdrawal_rate_table")) {
+  write_csv(eco_withdrawal_rate_table, "../../baseline_outputs/eco_withdrawal_rates.csv")
+  cat("Saved eco withdrawal rate table\n")
+}
+if (exists("eso_withdrawal_rate_table")) {
+  write_csv(eso_withdrawal_rate_table, "../../baseline_outputs/eso_withdrawal_rates.csv")
+  cat("Saved eso withdrawal rate table\n")
+}
+if (exists("judges_withdrawal_rate_table")) {
+  write_csv(judges_withdrawal_rate_table, "../../baseline_outputs/judges_withdrawal_rates.csv")
+  cat("Saved judges withdrawal rate table\n")
+}
+if (exists("senior_management_withdrawal_rate_table")) {
+  write_csv(senior_management_withdrawal_rate_table, "../../baseline_outputs/senior_management_withdrawal_rates.csv")
+  cat("Saved senior_management withdrawal rate table\n")
 }
 
-# Save salary and headcount tables
-for (class in c("regular", "special", "admin", "eco", "eso", "judges", "senior_management")) {
-  salary_var <- paste0(class, "_salary_table_")
-  headcount_var <- paste0(class, "_headcount_table_")
+cat("Withdrawal rate tables captured.\n")
 
-  if (exists(salary_var)) {
-    write_csv(get(salary_var), paste0("../../baseline_outputs/", class, "_salary_table.csv"))
-  }
-  if (exists(headcount_var)) {
-    write_csv(get(headcount_var), paste0("../../baseline_outputs/", class, "_headcount_table.csv"))
-  }
+#################################################################
+##                   Capture Retirement Eligibility Tables                 ##
+#################################################################
+
+cat("Capturing retirement eligibility tables...\n")
+
+# Save retirement tables for each class
+if (exists("normal_retirement_tier_1_table")) {
+  write_csv(normal_retirement_tier_1_table, "../../baseline_outputs/regular_normal_retirement.csv")
+  cat("Saved regular_normal retirement table\n")
+}
+if (exists("early_retirement_tier_1_table")) {
+  write_csv(early_retirement_tier_1_table, "../../baseline_outputs/regular_early_retirement.csv")
+  cat("Saved regular_early retirement table\n")
+}
+if (exists("normal_retirement_tier_2_table")) {
+  write_csv(normal_retirement_tier_2_table, "../../baseline_outputs/special_normal_retirement.csv")
+  cat("Saved special_normal retirement table\n")
+}
+if (exists("early_retirement_tier_2_table")) {
+  write_csv(early_retirement_tier_2_table, "../../baseline_outputs/special_early_retirement.csv")
+  cat("Saved special_early retirement table\n")
+}
+if (exists("normal_retirement_tier_3_table")) {
+  write_csv(normal_retirement_tier_3_table, "../../baseline_outputs/admin_normal_retirement.csv")
+  cat("Saved admin_normal retirement table\n")
+}
+if (exists("early_retirement_tier_3_table")) {
+  write_csv(early_retirement_tier_3_table, "../../baseline_outputs/admin_early_retirement.csv")
+  cat("Saved admin_early retirement table\n")
+}
+if (exists("normal_retirement_tier_4_table")) {
+  write_csv(normal_retirement_tier_4_table, "../../baseline_outputs/eco_normal_retirement.csv")
+  cat("Saved eco_normal retirement table\n")
+}
+if (exists("normal_retirement_tier_5_table")) {
+  write_csv(normal_retirement_tier_5_table, "../../baseline_outputs/judges_normal_retirement.csv")
+  cat("Saved judges_normal retirement table\n")
+}
+if (exists("normal_retirement_tier_6_table")) {
+  write_csv(normal_retirement_tier_6_table, "../../baseline_outputs/senior_management_normal_retirement.csv")
+  cat("Saved senior_management_normal retirement table\n")
 }
 
-cat("Input data captured.\n\n")
+cat("Retirement eligibility tables captured.\n")
+
+#################################################################
+##                   Capture Salary and Headcount Tables                 ##
+#################################################################
+
+cat("Capturing salary and headcount tables...\n")
+
+# Save salary and headcount tables for each class
+if (exists("regular_salary_table")) {
+  write_csv(regular_salary_table, "../../baseline_outputs/regular_salary.csv")
+  cat("Saved regular_salary table\n")
+}
+if (exists("regular_headcount_table")) {
+  write_csv(regular_headcount_table, "../../baseline_outputs/regular_headcount.csv")
+  cat("Saved regular_headcount table\n")
+}
+if (exists("special_salary_table")) {
+  write_csv(special_salary_table, "../../baseline_outputs/special_salary.csv")
+  cat("Saved special_salary table\n")
+}
+if (exists("special_headcount_table")) {
+  write_csv(special_headcount_table, "../../baseline_outputs/special_headcount.csv")
+  cat("Saved special_headcount table\n")
+}
+if (exists("admin_salary_table")) {
+  write_csv(admin_salary_table, "../../baseline_outputs/admin_salary.csv")
+  cat("Saved admin_salary table\n")
+}
+if (exists("admin_headcount_table")) {
+  write_csv(admin_headcount_table, "../../baseline_outputs/admin_headcount.csv")
+  cat("Saved admin_headcount table\n")
+}
+if (exists("eco_salary_table")) {
+  write_csv(eco_salary_table, "../../baseline_outputs/eco_salary.csv")
+  cat("Saved eco_salary table\n")
+}
+if (exists("eco_headcount_table")) {
+  write_csv(eco_headcount_table, "../../baseline_outputs/eco_headcount.csv")
+  cat("Saved eco_headcount table\n")
+}
+if (exists("judges_salary_table")) {
+  write_csv(judges_salary_table, "../../baseline_outputs/judges_salary.csv")
+  cat("Saved judges_salary table\n")
+}
+if (exists("judges_headcount_table")) {
+  write_csv(judges_headcount_table, "../../baseline_outputs/judges_headcount.csv")
+  cat("Saved judges_headcount table\n")
+}
+if (exists("senior_management_salary_table")) {
+  write_csv(senior_management_salary_table, "../../baseline_outputs/senior_management_salary.csv")
+  cat("Saved senior_management_salary table\n")
+}
+if (exists("senior_management_headcount_table")) {
+  write_csv(senior_management_headcount_table, "../../baseline_outputs/senior_management_headcount.csv")
+  cat("Saved senior_management_headcount table\n")
+}
+
+cat("Salary and headcount tables captured.\n")
 
 #################################################################
 ##                   Capture Workforce Data                      ##
@@ -162,136 +343,109 @@ cat("Input data captured.\n\n")
 
 cat("Capturing workforce data...\n")
 
-# Run workforce model for each class
-classes <- c("regular", "special", "admin", "eco", "eso", "judges", "senior management")
+# Process each class's workforce data from RDS files
+classes <- c("regular", "special", "admin", "eco", "eso", "judges", "senior_management")
 
 for (class_name in classes) {
-  cat(sprintf("  Processing class: %s\n", class_name))
+  cat(sprintf("Processing class: %s\n", class_name))
 
-  wf_data <- get_wf_data(class_name = class_name)
+  # Check if RDS file exists
+  rds_file <- paste0(class_name, "_wf_data.rds")
 
-  # Save workforce data
-  write_csv(wf_data$wf_active_df,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_active.csv"))
-  write_csv(wf_data$wf_term_df,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_term.csv"))
-  write_csv(wf_data$wf_retire_df,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_retire.csv"))
+  if (file.exists(rds_file)) {
+    cat(sprintf("Loading %s workforce data from RDS...\n", class_name))
+    wf_data <- readRDS(rds_file)
 
-  # Save summary statistics
-  wf_summary <- list(
-    total_active = sum(wf_data$wf_active_df, na.rm = TRUE),
-    total_terminations = sum(wf_data$wf_term_df, na.rm = TRUE),
-    total_retirements = sum(wf_data$wf_retire_df, na.rm = TRUE),
-    years = length(unique(wf_data$wf_active_df$year)),
-    ages = length(unique(wf_data$wf_active_df$age)),
-    entry_ages = length(unique(wf_data$wf_active_df$entry_age))
-  )
-  write_json(wf_summary,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_summary.json"),
-             pretty = TRUE)
+    # Save workforce data as CSV
+    if (!is.null(wf_data$wf_active_df)) {
+      write_csv(wf_data$wf_active_df, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_active.csv"))
+    }
+    if (!is.null(wf_data$wf_term_df)) {
+      write_csv(wf_data$wf_term_df, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_term.csv"))
+    }
+    if (!is.null(wf_data$wf_refund_df)) {
+      write_csv(wf_data$wf_refund_df, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_refund.csv"))
+    }
+    if (!is.null(wf_data$wf_retire_df)) {
+      write_csv(wf_data$wf_retire_df, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_retire.csv"))
+    }
+
+    # Save summary statistics
+    wf_summary <- list(
+      total_active = if (!is.null(wf_data$wf_active_df)) sum(wf_data$wf_active_df$n_active, na.rm = TRUE) else 0,
+      total_terminations = if (!is.null(wf_data$wf_term_df)) sum(wf_data$wf_term_df$n_term, na.rm = TRUE) else 0,
+      total_refunds = if (!is.null(wf_data$wf_refund_df)) sum(wf_data$wf_refund_df$n_refund, na.rm = TRUE) else 0,
+      total_retirements = if (!is.null(wf_data$wf_retire_df)) sum(wf_data$wf_retire_df$n_retire, na.rm = TRUE) else 0,
+      years = if (!is.null(wf_data$wf_active_df)) length(unique(wf_data$wf_active_df$year)) else 0,
+      ages = if (!is.null(wf_data$wf_active_df)) length(unique(wf_data$wf_active_df$age)) else 0,
+      entry_ages = if (!is.null(wf_data$wf_active_df)) length(unique(wf_data$wf_active_df$entry_age)) else 0
+    )
+
+    write_json(wf_summary, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_wf_summary.json"), pretty = TRUE)
+
+    cat(sprintf("Captured %s workforce data\n", class_name))
+  } else {
+    cat(sprintf("RDS file not found for %s, skipping\n", class_name))
+  }
 }
 
-cat("Workforce data captured.\n\n")
+cat("Workforce data captured.\n")
 
 #################################################################
-##                   Capture Benefit Data                         ##
-#################################################################
-
-cat("Capturing benefit data...\n")
-
-for (class_name in classes) {
-  cat(sprintf("  Processing class: %s\n", class_name))
-
-  benefit_data <- get_benefit_data(class_name = class_name)
-
-  # Save benefit valuation table
-  write_csv(benefit_data$benefit_val_table,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_benefit_val.csv"))
-
-  # Save normal cost data
-  write_csv(benefit_data$nc_agg,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_nc_agg.csv"))
-
-  # Save benefit summary
-  benefit_summary <- list(
-    total_nc = sum(benefit_data$nc_agg$normal_cost_aggregate_DB, na.rm = TRUE),
-    total_pvfb = sum(benefit_data$nc_agg$pvfb_aggregate_DB, na.rm = TRUE),
-    total_pvfs = sum(benefit_data$nc_agg$pvfs_aggregate_DB, na.rm = TRUE),
-    total_al = sum(benefit_data$nc_agg$al_aggregate_DB, na.rm = TRUE)
-  )
-  write_json(benefit_summary,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_benefit_summary.json"),
-             pretty = TRUE)
-}
-
-cat("Benefit data captured.\n\n")
-
-#################################################################
-##                   Capture Liability Data                       ##
+##                   Capture Liability Data                      ##
 #################################################################
 
 cat("Capturing liability data...\n")
 
-source("Florida FRS liability model.R")
-
+# Run liability model for each class
 for (class_name in classes) {
-  cat(sprintf("  Processing class: %s\n", class_name))
+  cat(sprintf("Processing liability data for class: %s\n", class_name))
 
+  # Get liability data
   liability_data <- get_liability_data(class_name = class_name)
 
-  # Save liability data
-  write_csv(liability_data$liability_agg,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_liability_agg.csv"))
+  # Save liability data as CSV
+  write_csv(liability_data, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_liability.csv"))
 
   # Save liability summary
   liability_summary <- list(
-    total_tal = sum(liability_data$liability_agg$tal_aggregate_DB, na.rm = TRUE),
-    total_nc = sum(liability_data$liability_agg$nc_aggregate_DB, na.rm = TRUE),
-    total_pvfb = sum(liability_data$liability_agg$pvfb_aggregate_DB, na.rm = TRUE),
-    total_pvfs = sum(liability_data$liability_agg$pvfs_aggregate_DB, na.rm = TRUE),
-    total_al = sum(liability_data$liability_agg$al_aggregate_DB, na.rm = TRUE)
+    total_tal_legacy = if ("tal_legacy_est" %in% names(liability_data)) sum(liability_data$tal_legacy_est, na.rm = TRUE) else 0,
+    total_tal_new = if ("tal_new_est" %in% names(liability_data)) sum(liability_data$tal_new_est, na.rm = TRUE) else 0,
+    total_nc_legacy = if ("nc_legacy_est" %in% names(liability_data)) sum(liability_data$nc_legacy_est, na.rm = TRUE) else 0,
+    total_nc_new = if ("nc_new_est" %in% names(liability_data)) sum(liability_data$nc_new_est, na.rm = TRUE) else 0,
+    total_pvfb_legacy = if ("pvfb_legacy_est" %in% names(liability_data)) sum(liability_data$pvfb_legacy_est, na.rm = TRUE) else 0,
+    total_pvfb_new = if ("pvfb_new_est" %in% names(liability_data)) sum(liability_data$pvfb_new_est, na.rm = TRUE) else 0,
+    total_al_legacy = if ("al_legacy_est" %in% names(liability_data)) sum(liability_data$al_legacy_est, na.rm = TRUE) else 0,
+    total_al_new = if ("al_new_est" %in% names(liability_data)) sum(liability_data$al_new_est, na.rm = TRUE) else 0
   )
-  write_json(liability_summary,
-             paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_liability_summary.json"),
-             pretty = TRUE)
+
+  write_json(liability_summary, paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_liability_summary.json"), pretty = TRUE)
+
+  cat(sprintf("Captured %s liability data\n", class_name))
 }
 
-cat("Liability data captured.\n\n")
+cat("Liability data captured.\n")
 
 #################################################################
-##                   Capture Funding Data                         ##
+##                   Capture Funding Data                        ##
 #################################################################
 
 cat("Capturing funding data...\n")
 
-source("Florida FRS funding model.R")
-
-# Run baseline funding scenario
+# Run funding model
 funding_data <- get_funding_data()
 
 # Save funding data for each class
-for (class_name in c(classes, "drop", "frs")) {
-  cat(sprintf("  Processing class: %s\n", class_name))
+for (class_name in names(funding_data)) {
+  cat(sprintf("Processing funding data for: %s\n", class_name))
 
-  if (class_name %in% names(funding_data)) {
-    write_csv(funding_data[[class_name]],
-               paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_funding.csv"))
-  }
+  # Save funding data as CSV
+  write_csv(funding_data[[class_name]], paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_funding.csv"))
+
+  cat(sprintf("Captured %s funding data\n", class_name))
 }
 
-# Save FRS system summary
-frs_summary <- list(
-  total_ual_mva = funding_data$frs$total_ual_mva,
-  total_ual_ava = funding_data$frs$total_ual_ava,
-  total_nc_mva = funding_data$frs$total_nc_mva,
-  total_nc_ava = funding_data$frs$total_nc_ava,
-  fr_mva = funding_data$frs$fr_mva,
-  fr_ava = funding_data$frs$fr_ava
-)
-write_json(frs_summary, "../../baseline_outputs/frs_summary.json", pretty = TRUE)
-
-cat("Funding data captured.\n\n")
+cat("Funding data captured.\n")
 
 #################################################################
 ##                   Summary Report                              ##
@@ -302,8 +456,7 @@ cat("Baseline Extraction Complete\n")
 cat("========================================\n")
 cat(sprintf("Output directory: %s\n", getwd()))
 cat(sprintf("Total files created: %d\n", length(list.files("../../baseline_outputs"))))
-cat("\nAll baseline outputs saved to: baseline_outputs/\n")
 cat("\nNext steps:\n")
-cat("1. Review the captured data in baseline_outputs/\n")
+cat("1. Review captured data in baseline_outputs/\n")
 cat("2. Use these files as test fixtures for Python implementation\n")
 cat("3. Compare Python outputs against these baseline values\n")

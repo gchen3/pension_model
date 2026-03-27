@@ -1,253 +1,182 @@
 # Active Context
 
-## Current Session State
-
-**Last Updated:** 2026-03-27
-**Phase:** R Baseline Extraction
-**Current Focus:** R baseline extraction script running
+**Session Date:** 2026-03-27
+**Current Phase:** Validation Framework Complete
 
 ---
 
-## What Was Done This Session
+## Completed Work
 
-1. Confirmed model (glm-5) and Code mode operational
-2. Created Memory Bank folder structure with four files
-3. Received detailed project requirements from user:
-   - Migrate Florida FRS pension model from R to Python
-   - Create general-purpose, configurable pension modeling framework
-   - No global variables, clean architecture
-   - JSON-driven configuration
-   - Step-by-step validation against R model
-4. Analyzed R model structure and key files
-5. Designed five-module architecture:
-   - `pension_data` - Data ingestion and standardization
-   - `pension_tools` - Actuarial functions (pure functions)
-   - `pension_config` - Configuration management
-   - `pension_model` - Core calculations
-   - `pension_output` - Output generation
-6. Confirmed Python 3.14.0 installed (well above 3.11+ requirement)
-7. User preference: Use pip (not conda) for package management
-8. Git repository initialized and committed by user
-9. Explained when to use "new task" option vs continuing in current task
-10. **Created R baseline extraction script** at `scripts/extract_baseline.R`
-11. **Created pyproject.toml** with Python project configuration
-12. **Created complete Python project structure:**
-    - `src/pension_data/__init__.py`
-    - `src/pension_tools/__init__.py`
-    - `src/pension_config/__init__.py`
-    - `src/pension_model/__init__.py`
-    - `src/pension_output/__init__.py`
-    - `tests/__init__.py`
-    - `tests/test_pension_data/__init__.py`
-    - `tests/test_pension_tools/__init__.py`
-    - `tests/test_pension_config/__init__.py`
-    - `tests/test_pension_model/__init__.py`
-    - `tests/test_integration/__init__.py`
-    - `src/pension_model/core/` (directory)
-    - `configs/scenarios/` (directory)
-    - `baseline_outputs/` (directory)
-13. **R baseline extraction script is running** - User started execution
+### Phase 1: Foundation (COMPLETE)
+- [x] Project structure established
+- [x] Git repository initialized and pushed to https://github.com/donboyd5/pension_model.git
+- [x] Memory bank structure created
+- [x] Python environment confirmed (Python 3.14.0)
 
----
+### Phase 2: Configuration (COMPLETE)
+- [x] Configuration module implemented
+  - `src/pension_config/plan.py` - Pydantic models for plan configuration
+  - MembershipClass enum (7 classes)
+  - FundingPolicy, AmortizationMethod, ReturnScenario, Tier enums
+  - PlanConfig BaseModel with all plan parameters
 
-## Current Work Items
+### Phase 3: Data Module (COMPLETE)
+- [x] Data module implemented
+  - `src/pension_data/loaders.py` - ExcelLoader and CSVLoader classes
+  - `src/pension_data/schemas.py` - Pydantic data models (long format design)
+  - `src/pension_data/data_transformer.py` - Data transformers
+  - Key Design: Long format for core data (one row = one entity)
 
-### Immediate Next Steps
-- [x] Create R baseline extraction script
-- [x] Create pyproject.toml
-- [x] Create module __init__.py files
-- [x] Create test directory structure
-- [x] Start R baseline extraction script
-- [ ] Verify R baseline extraction completed successfully
-- [ ] Review captured baseline outputs in `baseline_outputs/`
-- [ ] Commit work and push to GitHub
-- [ ] Design JSON configuration schema
-- [ ] Implement pension_data module (data ingestion)
-- [ ] Implement pension_tools module (actuarial functions)
-- [ ] Implement pension_config module (configuration management)
-- [ ] Implement pension_model module (core calculations)
-- [ ] Implement pension_output module (output generation)
-- [ ] Create validation framework
-- [ ] Validate against R baseline
-- [ ] Document discrepancies in issues.md
-- [ ] Performance optimization
+### Phase 4: Tools Module (COMPLETE)
+- [x] Pension tools module implemented
+  - `src/pension_tools/financial.py` - Financial functions (PV, NPV, FV, discount factors, amortization)
+  - `src/pension_tools/salary.py` - Salary growth functions
+  - `src/pension_tools/mortality.py` - Mortality functions (qx, complement of survival, life expectancy)
+  - `src/pension_tools/withdrawal.py` - Withdrawal rate functions
+  - `src/pension_tools/retirement.py` - Retirement eligibility (normal/early checks, early factors)
+  - `src/pension_tools/benefit.py` - Benefit calculations (normal cost, accrued liability, PVFB, PVFS)
 
-### Blockers
-- Waiting for R baseline extraction script to complete
+### Phase 5: Pension Model Module (COMPLETE)
+- [x] Core calculation engines implemented
+  - `src/pension_model/core/workforce.py` - Workforce projection engine
+    - WorkforceProjector class for projecting active, terminated, refund, retiree populations
+    - Markov chain approach for population transitions
+    - Year-by-year streaming to avoid keeping all years in memory
 
----
+  - `src/pension_model/core/benefit.py` - Benefit calculation engine
+    - BenefitCalculator class for calculating benefits, NC, AAL, PVFB, PVFS
+    - Benefit formulas by membership class (Regular, Special Risk, etc.)
+    - Tier determination logic (tier_1, tier_2, tier_3)
+    - Annuity factor calculation with COLA
 
-## Key Decisions Made
+  - `src/pension_model/core/liability.py` - Liability calculation engine
+    - LiabilityCalculator class for calculating actuarial liabilities
+    - Plan design allocation (DB vs DC, legacy vs new)
+    - Active, terminated, retiree, refund liabilities
+    - Roll-forward method for AAL (matching R model approach)
+    - Liability gain/loss calculation
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-03-27 | Five-module architecture (data/tools/config/model/output) | Separates concerns better than three modules; config module handles complex plan parameters |
-| 2026-03-27 | JSON for configuration | Human-readable, widely supported, easy to validate |
-| 2026-03-27 | No global variables | Improves testability, reduces coupling, enables parallelization |
-| 2026-03-27 | Pure functions in pension_tools | Easier to test, no side effects |
-| 2026-03-27 | Pydantic for validation | Type-safe, runtime validation, IDE support |
-| 2026-03-27 | Use pip for package management | User preference over conda |
-| 2026-03-27 | Memory Bank files can be updated freely by AI | For tracking/documentation purposes; code changes require approval |
-| 2026-03-27 | Architecture should follow Python best practices, NOT mirror R structure | User feedback - design de novo using best practices |
+  - `src/pension_model/core/funding.py` - Funding calculation engine
+    - FundingCalculator class for calculating funding status
+    - AAL roll-forward with mid-year timing: AAL_t = AAL_{t-1} * (1 + dr) + (NC - Benefits - Refunds) * (1 + dr)^0.5
+    - Liability gain/loss calculation
+    - Payroll projection with growth
+    - Funding ratio calculation
 
----
+  - `src/pension_model/model.py` - Main model orchestrator
+    - PensionModel class coordinating all calculation engines
+    - Data loading from Excel/CSV
+    - Sequential execution: workforce → benefit → liability → funding
+    - Results aggregation by membership class and year
 
-## R Model Analysis Notes
+### Phase 6: Output Module (COMPLETE)
+- [x] Output generation module implemented
+  - `src/pension_output/generators.py` - Output generators
+    - OutputGenerator class for generating summaries and detailed tables
+    - Workforce summary generation
+    - Benefit summary generation
+    - Liability summary generation
+    - Funding summary generation
+    - FRS system summary aggregation
+    - Export to CSV, Excel, and JSON formats
 
-### Key Files to Port (Priority Order)
-1. `Florida FRS model input.R` - Data loading and constants
-2. `utility_functions.R` - Helper functions (PV, NPV, amortization)
-3. `Florida FRS workforce model.R` - Workforce projections
-4. `Florida FRS benefit model.R` - Benefit calculations
-5. `Florida FRS liability model.R` - Liability projections
-6. `Florida FRS funding model.R` - Funding calculations
-7. `Florida FRS master.R` - Orchestration (reference only)
-
-### Global Variables Identified (Partial List)
-- Discount rates: `dr_old_`, `dr_current_`, `dr_new_`
-- COLA assumptions: `cola_tier_1_active_`, `cola_tier_2_active_`, etc.
-- DB/DC ratios: `special_db_legacy_before_2018_ratio_`, etc.
-- Funding policy: `funding_policy_`, `amo_period_new_`, etc.
-- Model parameters: `model_period_`, `start_year_`, `new_year_`, etc.
-
-### Membership Classes (7 total)
-1. Regular
-2. Special Risk
-3. Special Risk Administrative
-4. Judicial
-5. Legislators/Attorney/Cabinet (ECO)
-6. Local (ESO)
-7. Senior Management
+### Phase 7: Validation Framework (COMPLETE)
+- [x] Validation module implemented
+  - `src/validation/comparators.py` - Comparison logic
+    - ComparisonResult dataclass for single comparison
+    - ComparisonSummary dataclass for summary of comparisons
+    - ValidationConfig dataclass for tolerance levels
+    - Validator class for validating Python outputs against R baseline
+    - Compare at multiple tolerance levels (strict 1%, moderate 5%, lenient 10%)
+    - Provide detailed discrepancy reports
+    - Calculate pass/fail rates
+  - Support for comparison by year, class, and metric
 
 ---
 
-## Session History
+## Current Task
 
-| Session Date | Focus | Outcome |
-|--------------|-------|---------|
-| 2026-03-27 | Project initialization | Memory bank created, comprehensive plan documented, git repo initialized |
-| 2026-03-27 | R baseline extraction script | Created `scripts/extract_baseline.R` to capture all R model outputs |
-| 2026-03-27 | Python project setup | Created pyproject.toml and complete module structure |
-| 2026-03-27 | R baseline extraction | Script running, capturing outputs for comparison |
+**Implementing validation framework** - COMPLETE
 
----
+All core calculation engines and validation framework have been implemented:
 
-## Technology Stack Decisions
-
-### Python Version
-- **Required:** 3.11+
-- **User Has:** 3.14.0 ✓
-
-### Package Management
-- **Choice:** pip (user preference, not conda)
-
-### Core Dependencies
-- pandas - Data manipulation
-- numpy - Numerical calculations
-- pydantic - Data validation
-- openpyxl - Excel file reading
-- pytest - Testing framework
-
-### Development Tools
-- black - Code formatting
-- ruff - Fast linter
-- mypy - Type checking
-- pre-commit - Git hooks
+1. **Workforce Projection** - Projects population through Markov chain
+2. **Benefit Calculation** - Calculates benefits using tier-specific formulas
+3. **Liability Calculation** - Uses roll-forward method matching R model
+4. **Funding Calculation** - AAL roll-forward with mid-year timing
+5. **Validation Framework** - Compares Python to R baseline with configurable tolerances
 
 ---
 
-## R Baseline Extraction Script
+## Key Implementation Notes
 
-**Location:** `scripts/extract_baseline.R`
+**R Model Methodology:**
+- Roll-forward method for AAL: AAL_t = AAL_{t-1} * (1 + dr) + (NC - Benefits - Refunds) * (1 + dr)^0.5
+- Mid-year timing: NC accrual and benefit payments occur at mid-year (discounted by (1+dr)^0.5)
+- Liability gain/loss: Difference between estimated and rolled-forward AAL
 
-**Purpose:** Runs full R model and captures all intermediate outputs as CSV and JSON files for comparison with Python implementation.
+**Python Implementation:**
+- All core engines follow R model's methodology
+- Long format design for memory efficiency
+- Year-by-year streaming to avoid keeping all years in memory
+- Pure functions in tools module for testability
+- Pydantic validation for type safety
 
-**Outputs Captured:**
-- Input parameters (JSON)
-- Salary growth table (CSV)
-- Mortality tables (CSV)
-- Withdrawal rate tables (CSV)
-- Retirement eligibility tables (CSV)
-- Salary and headcount tables (CSV)
-- Workforce projections (CSV + summary JSON)
-- Benefit valuations (CSV + summary JSON)
-- Liability calculations (CSV + summary JSON)
-- Funding calculations (CSV + FRS summary JSON)
-
-**Output Directory:** `baseline_outputs/`
-
-**Status:** ⏳ Running (user initiated execution)
+**Baseline Extraction Status:**
+- Script created at `scripts/extract_baseline.R`
+- Only generated 2 files (input_params.json, salary_growth_table.csv)
+- Full baseline extraction needs to be run to generate all comparison data
 
 ---
 
-## Python Project Structure (Complete)
+## Next Steps
 
-**Created Files:**
-- `pyproject.toml` - Project configuration with dependencies and tool settings
-- `scripts/extract_baseline.R` - R baseline extraction script
-
-**Created Directories:**
-- `src/pension_data/` - Data module
-- `src/pension_tools/` - Tools module
-- `src/pension_config/` - Config module
-- `src/pension_model/` - Model module
-- `src/pension_model/core/` - Core calculation subdirectory
-- `src/pension_output/` - Output module
-- `tests/` - Test suite
-- `tests/test_pension_data/` - Data module tests
-- `tests/test_pension_tools/` - Tools module tests
-- `tests/test_pension_config/` - Config module tests
-- `tests/test_pension_model/` - Model module tests
-- `tests/test_integration/` - Integration tests
-- `configs/scenarios/` - Scenario configurations
-- `baseline_outputs/` - R baseline outputs
-
-**Created __init__.py Files:**
-- `src/pension_data/__init__.py`
-- `src/pension_tools/__init__.py`
-- `src/pension_config/__init__.py`
-- `src/pension_model/__init__.py`
-- `src/pension_output/__init__.py`
-- `tests/__init__.py`
-- `tests/test_pension_data/__init__.py`
-- `tests/test_pension_tools/__init__.py`
-- `tests/test_pension_config/__init__.py`
-- `tests/test_pension_model/__init__.py`
-- `tests/test_integration/__init__.py`
+1. **Fix R baseline extraction script** - Ensure all outputs are generated
+2. **Run R baseline extraction** - Execute `Rscript scripts/extract_baseline.R`
+3. **Validate against R baseline** - Run validation framework comparing Python outputs to R baseline
+4. **Document discrepancies in issues.md** - Track differences between Python and R
+5. **Performance optimization** - Profile and optimize critical calculation paths
 
 ---
 
-## Git Setup Status
+## File Structure
 
-**Status:** Ready to commit and push
-
-- [x] `git init` - Repository initialized
-- [x] `.gitignore` created
-- [x] `git add .` - Files staged
-- [x] `git commit -m "Initial commit: R model baseline"` - Initial commit
-- [ ] Add remote origin (if not done)
-- [ ] Push to GitHub
+```
+src/
+├── pension_config/          # Configuration management
+│   └── plan.py
+├── pension_data/           # Data ingestion and standardization
+│   ├── loaders.py
+│   ├── schemas.py
+│   └── data_transformer.py
+├── pension_tools/          # Actuarial functions (pure functions)
+│   ├── financial.py
+│   ├── salary.py
+│   ├── mortality.py
+│   ├── withdrawal.py
+│   ├── retirement.py
+│   └── benefit.py
+├── pension_model/          # Core calculations
+│   ├── model.py            # Main orchestrator
+│   └── core/
+│       ├── workforce.py
+│       ├── benefit.py
+│       ├── liability.py
+│       └── funding.py
+├── pension_output/          # Output generation
+│   └── generators.py
+└── validation/              # Validation framework
+    └── comparators.py
+```
 
 ---
 
-## Reminders for Next Session
+## Notes
 
-1. Wait for R baseline extraction script to complete
-2. Verify outputs in `baseline_outputs/` directory
-3. Review captured data to understand R model structure
-4. Design architecture following Python best practices (NOT mirroring R structure)
-5. Focus on clean, modular design with proper separation of concerns
-6. Document all global variables found in R code
-7. Create test fixtures from R model outputs early
+- User feedback: "please make sure you are familiar with pension math. R model is quite muddled I think, in terms of when and how they do calculations, although I think they are generally correct"
+- Implemented roll-forward method for AAL calculation matching R model approach
+- Mid-year timing: (1 + dr)^0.5 factor for NC accrual and benefit payments
+- Liability gain/loss: Difference between estimated and rolled-forward AAL
 
----
-
-## Environment Details
-
-- **Operating System:** Windows 11
-- **Python Version:** 3.14.0
-- **Current Working Directory:** `d:/python_projects/pension_model`
-- **R Model Location:** `R_model/R_model_original/`
-- **Actuarial Resources:** `actuarial_calculations/`
-- **Git Status:** Initialized, ready to push to GitHub
-- **R Extraction Status:** ⏳ Running
+- Baseline extraction script needs to be fixed to generate complete baseline outputs
+- Once baseline is available, validation framework can compare Python outputs to R baseline
