@@ -39,47 +39,48 @@ The existing R model has significant issues:
 
 ### Module Structure
 
-After analyzing the R model, I recommend **four main modules** (not three) for better separation of concerns:
+**IMPORTANT:** This architecture follows Python best practices and is NOT tied to the R project structure. The design is de novo, using modern Python patterns.
 
 ```
 pension_model/
-├── pension_data/          # Data ingestion and standardization
-│   ├── __init__.py
-│   ├── config_loader.py   # JSON config parsing and validation
-│   ├── excel_loader.py    # Excel/CSV data loading
-│   ├── data_transformer.py # Transform raw data to standard format
-│   └── schemas.py         # Pydantic models for validation
-│
-├── pension_tools/         # Actuarial functions (pure functions, no state)
-│   ├── __init__.py
-│   ├── financial.py       # PV, NPV, FV, discount factors
-│   ├── salary.py          # Salary growth projections
-│   ├── mortality.py       # Mortality tables and calculations
-│   ├── withdrawal.py      # Withdrawal/termination rates
-│   ├── retirement.py      # Retirement eligibility and factors
-│   ├── benefit.py         # Benefit calculations
-│   └── amortization.py    # Amortization calculations
-│
-├── pension_config/        # Configuration management
-│   ├── __init__.py
-│   ├── plan_config.py     # Plan-specific parameters
-│   ├── assumptions.py     # Actuarial/economic assumptions
-│   ├── tiers.py           # Tier definitions
-│   └── scenarios.py       # Scenario management
-│
-├── pension_model/         # Core calculations (orchestrates tools + data)
-│   ├── __init__.py
-│   ├── workforce.py       # Workforce modeling and projection
-│   ├── liability.py       # Liability projections
-│   ├── funding.py         # Funding/amortization calculations
-│   ├── cola.py            # COLA calculations
-│   └── projection.py      # Main projection engine
-│
-├── pension_output/        # Output generation and formatting
-│   ├── __init__.py
-│   ├── tables.py          # Generate output tables
-│   ├── summaries.py       # Generate summary statistics
-│   └── export.py          # Export to various formats
+├── src/
+│   ├── pension_data/          # Data ingestion and standardization
+│   │   ├── __init__.py
+│   │   ├── loaders.py         # Excel/CSV data loading
+│   │   ├── transformers.py    # Transform raw data to standard format
+│   │   └── schemas.py         # Pydantic models for validation
+│   │
+│   ├── pension_tools/         # Actuarial functions (pure functions, no state)
+│   │   ├── __init__.py
+│   │   ├── financial.py       # PV, NPV, FV, discount factors
+│   │   ├── salary.py          # Salary growth projections
+│   │   ├── mortality.py       # Mortality tables and calculations
+│   │   ├── withdrawal.py      # Withdrawal/termination rates
+│   │   ├── retirement.py      # Retirement eligibility and factors
+│   │   ├── benefit.py         # Benefit calculations
+│   │   └── amortization.py    # Amortization calculations
+│   │
+│   ├── pension_config/        # Configuration management
+│   │   ├── __init__.py
+│   │   ├── plan.py            # Plan-specific parameters
+│   │   ├── assumptions.py     # Actuarial/economic assumptions
+│   │   ├── tiers.py           # Tier definitions
+│   │   └── scenarios.py       # Scenario management
+│   │
+│   ├── pension_model/         # Core calculations
+│   │   ├── __init__.py
+│   │   ├── engine.py          # Main simulation engine
+│   │   ├── workforce.py       # Workforce modeling and projection
+│   │   ├── benefits.py        # Benefit calculations
+│   │   ├── liability.py       # Liability projections
+│   │   ├── funding.py         # Funding/amortization calculations
+│   │   └── cola.py            # COLA calculations
+│   │
+│   └── pension_output/        # Output generation and formatting
+│       ├── __init__.py
+│       ├── tables.py          # Generate output tables
+│       ├── summaries.py       # Generate summary statistics
+│       └── export.py          # Export to various formats
 │
 ├── configs/               # JSON configuration files
 │   ├── plan_config.json   # Plan parameters
@@ -87,31 +88,21 @@ pension_model/
 │   ├── tiers.json         # Tier definitions
 │   └── scenarios/         # Scenario-specific configs
 │
-└── tests/                 # Test suite
-    ├── test_pension_data/
-    ├── test_pension_tools/
-    ├── test_pension_config/
-    ├── test_pension_model/
-    └── test_integration/
+├── tests/                 # Test suite
+│   ├── test_pension_data/
+│   ├── test_pension_tools/
+│   ├── test_pension_config/
+│   ├── test_pension_model/
+│   └── test_integration/
+│
+├── scripts/               # Utility scripts
+│   └── extract_baseline.R # R baseline extraction
+│
+├── baseline_outputs/       # R model outputs for comparison
+├── pyproject.toml         # Python project configuration
+├── .gitignore
+└── README.md
 ```
-
-### Why Four Modules Instead of Three?
-
-Your original three-module idea was:
-1. `pension_data` - Data ingestion
-2. `pension_tools` - Actuarial functions
-3. `pension_model` - Core calculations
-
-I recommend adding a fourth module:
-
-**`pension_config`** - Configuration Management
-
-**Rationale:**
-- Configuration is complex in pension models (plan params, assumptions, tiers, scenarios)
-- Separating config logic makes the model module cleaner
-- Easier to manage scenario variants and policy levers
-- Config module can handle validation, defaults, and overrides
-- Model module can focus purely on calculation logic
 
 ### Key Design Principles
 
@@ -122,6 +113,7 @@ I recommend adding a fourth module:
 5. **Generalizable** - Designed to handle multiple pension plans, not just Florida FRS
 6. **Type Hints** - All functions use Python type hints for better IDE support
 7. **Dataclasses/Pydantic** - Structured data models for complex objects
+8. **Python Best Practices** - Following PEP 8, using modern Python patterns
 
 ---
 
@@ -145,14 +137,14 @@ graph TD
 ## Development Milestones
 
 ### Phase 0: Foundation (Setup & Infrastructure)
-- [ ] Initialize git repository (user to run commands)
-- [ ] Set up Python project structure (pyproject.toml, src layout)
-- [ ] Configure development tools (pytest, black, mypy, ruff)
+- [x] Initialize git repository
+- [x] Set up Python project structure (pyproject.toml, src layout)
+- [x] Configure development tools (pytest, black, mypy, ruff)
 - [ ] Create directory structure
 - [ ] Set up pre-commit hooks
 
 ### Phase 1: R Baseline Extraction
-- [ ] Create R script to run baseline case and capture all intermediate outputs
+- [x] Create R script to run baseline case and capture all intermediate outputs
 - [ ] Save R outputs to CSV/JSON for comparison
 - [ ] Document all global variables in R code
 - [ ] Catalog all R functions and their purposes
@@ -277,8 +269,6 @@ The R model handles 7 membership classes:
 
 ## Git Setup Commands
 
-Please run these commands to initialize the git repository:
-
 ```bash
 # Initialize git
 git init
@@ -329,10 +319,14 @@ git commit -m "Initial commit: R model baseline"
 
 ## Next Steps
 
-1. **User Action:** Run git setup commands above
-2. **Architect Mode:** Create detailed R baseline extraction script
-3. **Implementation Mode:** Set up Python project structure
-4. **Verification Mode:** Run R model and capture baseline outputs
+1. **Complete Python project structure** - Remaining __init__.py files and module files
+2. **Run R baseline extraction** - `Rscript scripts/extract_baseline.R`
+3. **Implement configuration module** - Start with Pydantic schemas
+4. **Implement data module** - Excel loading and transformation
+5. **Implement tools module** - Pure actuarial functions
+6. **Implement model module** - Core calculation engines
+7. **Implement output module** - Table generation and export
+8. **Validate against R baseline** - Compare outputs
 
 ---
 
