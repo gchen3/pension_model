@@ -9,7 +9,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from .adapters import BasePlanAdapter, PlanRegistry
-from .plan import MembershipClass, Tier
+from .types import MembershipClass, Tier
 
 
 class FRSAdapter(BasePlanAdapter):

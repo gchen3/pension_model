@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol, runtime_checkable, Any, Dict, List, Optional
 
-from .plan import MembershipClass, Tier
+# Import enums from types.py (no circular imports)
+from .types import MembershipClass, Tier
 
 
 class FundingPolicy(str, Enum):
@@ -355,7 +356,6 @@ class BasePlanAdapter(ABC):
         return errors
 
 
-@dataclass
 class PlanRegistry:
     """
     Registry for available plan adapters.
@@ -364,15 +364,15 @@ class PlanRegistry:
     by plan name.
     """
 
-    _adapters: Dict[str, PlanAdapter] = {}
+    _adapters: Dict[str, Any] = {}
 
     @classmethod
-    def register(cls, adapter: PlanAdapter) -> None:
+    def register(cls, adapter: Any) -> None:
         """Register a plan adapter"""
         cls._adapters[adapter.plan_name] = adapter
 
     @classmethod
-    def get(cls, plan_name: str) -> Optional[PlanAdapter]:
+    def get(cls, plan_name: str) -> Optional[Any]:
         """Get a plan adapter by name"""
         return cls._adapters.get(plan_name)
 

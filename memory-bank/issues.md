@@ -7,6 +7,23 @@
 
 ---
 
+## ⚠️ IMPORTANT: Git Workflow Rules
+
+**NEVER commit directly to main branch!**
+
+Always create a feature branch for any work:
+```bash
+git checkout -b feature/description-of-work
+# ... do work ...
+git add -A && git commit -m "message"
+git push origin feature/description-of-work
+# Then merge via PR or after approval
+```
+
+This applies to ALL changes, no matter how small.
+
+---
+
 ## Known Issues
 
 ### 1. Model Architecture Issues (From Colleague Review)
