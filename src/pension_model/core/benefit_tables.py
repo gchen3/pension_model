@@ -260,23 +260,37 @@ def build_salary_benefit_table(
     # Drop rows with NaN salary (entry_age not in profile)
     df = df[df["salary"].notna()].copy()
 
-    # Compute FAS and db_ee_balance within each (entry_year, entry_age) group
-    def _compute_group(g):
-        g = g.sort_values("yos")
-        sal = g["salary"].values
-        fas_period = g["fas_period"].values[0]  # same within group for tier_1 check
-        # Actually fas_period can vary within group if tier changes. Use per-row.
-        # But R uses a single fas_period per group based on the tier.
-        # For correctness, use the period from the first row (R uses group-level).
-        g["fas"] = _rolling_mean_lagged(sal, fas_period)
-        contrib = ben.db_ee_cont_rate * sal
-        g["db_ee_balance"] = _cum_fv(ben.db_ee_interest_rate, contrib)
-        return g
+    # Compute FAS and db_ee_balance within each (entry_year, entry_age) group.
+    # FAS = lagged rolling mean of salary (window = fas_period, NOT including current)
+    # db_ee_balance = cumulative contributions with lag (balance[0]=0, balance[i]=sum of contribs[0..i-1])
+    df = df.sort_values(["entry_year", "entry_age", "yos"]).reset_index(drop=True)
+    grp_keys = ["entry_year", "entry_age"]
+    g = df.groupby(grp_keys)
 
-    result_parts = []
-    for (ey, ea), g in df.groupby(["entry_year", "entry_age"]):
-        result_parts.append(_compute_group(g))
-    df = pd.concat(result_parts, ignore_index=True)
+    # FAS: R's baseR.rollmean computes mean of PREVIOUS fas_period values (lagged)
+    # For tier_1 (fas_period=5), FAS[t] = mean(salary[t-5:t])
+    # Use the first fas_period in each group (R does same)
+    first_fas = g["fas_period"].transform("first").astype(int)
+
+    # Compute FAS using rolling on shifted salary within groups
+    # Shift salary by 1 within group (lag), then rolling mean
+    sal_shifted = g["salary"].shift(1)
+    # For each unique fas_period, compute rolling mean separately
+    df["fas"] = np.nan
+    for fp in df["fas_period"].unique():
+        mask = first_fas == fp
+        if mask.any():
+            # Rolling mean of lagged salary with window=fp, min_periods=1
+            rolled = sal_shifted.where(mask).groupby([df.loc[mask, c] for c in grp_keys]).rolling(fp, min_periods=1).mean()
+            df.loc[rolled.index.get_level_values(-1), "fas"] = rolled.values
+
+    # db_ee_balance: cumsum of lagged contributions
+    # balance[0] = 0, balance[i] = balance[i-1]*(1+rate) + contrib[i-1]
+    # With rate=0: balance[i] = sum(contrib[0:i])
+    df["_contrib"] = ben.db_ee_cont_rate * df["salary"]
+    contrib_shifted = df.groupby(grp_keys)["_contrib"].shift(1, fill_value=0)
+    df["db_ee_balance"] = contrib_shifted.groupby([df[c] for c in grp_keys]).cumsum()
+    df = df.drop(columns=["_contrib"])
     df = df[df["salary"].notna()].copy()
 
     result = df[["entry_year", "entry_age", "yos", "term_age", "tier_at_term_age",
@@ -393,26 +407,15 @@ def build_separation_rate_table(
         ),
     )
 
-    # Compute remaining_prob and separation_prob within each (entry_year, entry_age) group
-    def _compute_probs(g):
-        g = g.sort_values("yos")
-        sep = g["separation_rate"].values.copy()
-        n = len(sep)
-        rp = np.ones(n)
-        for i in range(1, n):
-            rp[i] = rp[i - 1] * (1 - sep[i - 1])
-        sp = np.empty(n)
-        sp[0] = 1.0 - rp[0]  # lag(rp, default=1) - rp
-        for i in range(1, n):
-            sp[i] = rp[i - 1] - rp[i]
-        g["remaining_prob"] = rp
-        g["separation_prob"] = sp
-        return g
-
-    result_parts = []
-    for (ey, ea), g in df.groupby(["entry_year", "entry_age"]):
-        result_parts.append(_compute_probs(g))
-    df = pd.concat(result_parts, ignore_index=True)
+    # Compute remaining_prob = cumprod(1 - lag(separation_rate, default=0))
+    # Vectorized using groupby shift + cumprod
+    df = df.sort_values(["entry_year", "entry_age", "yos"]).reset_index(drop=True)
+    grp = df.groupby(["entry_year", "entry_age"])
+    sep_lagged = grp["separation_rate"].shift(1, fill_value=0.0)
+    df["remaining_prob"] = (1 - sep_lagged).groupby([df["entry_year"], df["entry_age"]]).cumprod()
+    # separation_prob = lag(remaining_prob, default=1) - remaining_prob
+    rp_lagged = grp["remaining_prob"].shift(1, fill_value=1.0)
+    df["separation_prob"] = rp_lagged - df["remaining_prob"]
 
     df["class_name"] = class_name
     return df[["entry_year", "entry_age", "term_age", "yos", "term_year",
@@ -486,48 +489,32 @@ def build_ann_factor_table(
                  np.where(is_tier2, ben.cola_tier_2_active,
                  np.where(is_tier3, ben.cola_tier_3_active, 0.0)))
 
-    # Compute cumulative factors within each (entry_year, entry_age, yos) group
-    def _compute_cum(g):
-        g = g.sort_values("dist_age")
-        dr = g["dr"].values
-        mort = g["mort_final"].values
-        cola = g["cola"].values
-        n = len(g)
+    # Compute cumulative factors within each (entry_year, entry_age, yos) group.
+    # Vectorized: sort by group + dist_age, then use shift/cumprod within groups.
+    group_cols = ["entry_year", "entry_age", "yos"]
+    df = df.sort_values(group_cols + ["dist_age"]).reset_index(drop=True)
 
-        # cum_dr = cumprod(1 + lag(dr, default=0))
-        cum_dr = np.ones(n)
-        for i in range(1, n):
-            cum_dr[i] = cum_dr[i - 1] * (1 + dr[i - 1])
+    # Lagged values: shift within each group, fill first row with 0
+    g = df.groupby(group_cols)
+    dr_lagged = g["dr"].shift(1, fill_value=0.0)
+    mort_lagged = g["mort_final"].shift(1, fill_value=0.0)
+    cola_lagged = g["cola"].shift(1, fill_value=0.0)
 
-        # cum_mort = cumprod(1 - lag(mort, default=0))
-        cum_mort = np.ones(n)
-        for i in range(1, n):
-            cum_mort[i] = cum_mort[i - 1] * (1 - mort[i - 1])
+    # Cumulative products within groups
+    df["cum_dr"] = (1 + dr_lagged).groupby([df[c] for c in group_cols]).cumprod()
+    df["cum_mort"] = (1 - mort_lagged).groupby([df[c] for c in group_cols]).cumprod()
+    df["cum_cola"] = (1 + cola_lagged).groupby([df[c] for c in group_cols]).cumprod()
 
-        # cum_cola = cumprod(1 + lag(cola, default=0))
-        cum_cola = np.ones(n)
-        for i in range(1, n):
-            cum_cola[i] = cum_cola[i - 1] * (1 + cola[i - 1])
+    df["cum_mort_dr"] = df["cum_mort"] / df["cum_dr"]
+    df["cum_mort_dr_cola"] = df["cum_mort_dr"] * df["cum_cola"]
 
-        cum_mort_dr = cum_mort / cum_dr
-        cum_mort_dr_cola = cum_mort_dr * cum_cola
-
-        # ann_factor = reverse_cumsum(cum_mort_dr_cola) / cum_mort_dr_cola
-        rev_cumsum = np.flip(np.cumsum(np.flip(cum_mort_dr_cola)))
-        ann_factor = rev_cumsum / cum_mort_dr_cola
-
-        g["cum_dr"] = cum_dr
-        g["cum_mort"] = cum_mort
-        g["cum_cola"] = cum_cola
-        g["cum_mort_dr"] = cum_mort_dr
-        g["cum_mort_dr_cola"] = cum_mort_dr_cola
-        g["ann_factor"] = ann_factor
-        return g
-
-    result_parts = []
-    for _, g in df.groupby(["entry_year", "entry_age", "yos"]):
-        result_parts.append(_compute_cum(g))
-    df = pd.concat(result_parts, ignore_index=True)
+    # ann_factor = reverse_cumsum(cum_mort_dr_cola) / cum_mort_dr_cola within each group.
+    # Reverse cumsum trick: total_group_sum - cumsum + current_value = reverse cumsum.
+    grp = df.groupby(group_cols)["cum_mort_dr_cola"]
+    group_total = grp.transform("sum")
+    cum_forward = grp.cumsum()
+    rev_cumsum = group_total - cum_forward + df["cum_mort_dr_cola"]
+    df["ann_factor"] = rev_cumsum / df["cum_mort_dr_cola"]
     df["class_name"] = class_name
     return df
 
@@ -621,12 +608,17 @@ def build_final_benefit_table(benefit_table: pd.DataFrame) -> pd.DataFrame:
 
     # Determine distribution age per (entry_year, entry_age, term_age)
     # earliest_norm_retire_age = n() - sum(is_norm_retire_elig) + min(dist_age)
-    # This equals the first dist_age where norm retirement becomes eligible
-    dist_age_df = bt.groupby(["entry_year", "entry_age", "term_age"]).agg(
-        earliest_norm_retire_age=("is_norm_retire_elig",
-                                  lambda x: len(x) - x.sum() + bt.loc[x.index, "dist_age"].min()),
-        term_status=("tier_at_dist_age", "first"),  # tier at term_age (first row in group)
-    ).reset_index()
+    grp_keys = ["entry_year", "entry_age", "term_age"]
+    g = bt.groupby(grp_keys)
+    dist_age_df = pd.DataFrame({
+        "count": g["is_norm_retire_elig"].transform("count"),
+        "norm_count": g["is_norm_retire_elig"].transform("sum"),
+        "min_dist_age": g["dist_age"].transform("min"),
+        "term_status": g["tier_at_dist_age"].transform("first"),
+    })
+    dist_age_df["earliest_norm_retire_age"] = dist_age_df["count"] - dist_age_df["norm_count"] + dist_age_df["min_dist_age"]
+    # Get one row per group
+    dist_age_df = bt[grp_keys].join(dist_age_df).drop_duplicates(subset=grp_keys)
 
     # For vested (not non_vested): use earliest_norm_retire_age
     # For non_vested and retirees: use term_age
