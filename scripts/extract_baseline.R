@@ -8,7 +8,26 @@
 #################################################################
 
 # Set working directory to R model location
-setwd("R_model/R_model_original")
+# Get the script directory and set relative paths
+script_dir <- tryCatch(
+  {
+    # Try to get script path if running via Rscript
+    dirname(normalizePath(sys.frames()[[1]]$ofile))
+  },
+  error = function(e) {
+    # Fallback to current working directory
+    getwd()
+  }
+)
+
+# Set working directory relative to script location
+r_model_dir <- file.path(dirname(script_dir), "R_model", "R_model_original")
+if (!dir.exists(r_model_dir)) {
+  # Try alternate path
+  r_model_dir <- file.path(getwd(), "R_model", "R_model_original")
+}
+setwd(r_model_dir)
+cat(sprintf("Working directory: %s\n", getwd()))
 
 # Create output directory
 if (!dir.exists("../../baseline_outputs")) {
@@ -20,7 +39,7 @@ if (!dir.exists("../../baseline_outputs")) {
 library("readxl")
 library(tidyverse)
 library(zoo)
-library(profvis)
+tryCatch(library(profvis), error = function(e) cat("profvis not available, skipping\n"))
 library(data.table)
 library(openxlsx)
 library(janitor)
@@ -610,6 +629,53 @@ for (class_name in classes) {
 cat("Liability data captured.\n")
 
 #################################################################
+##                   Capture Benefit Data (Intermediate)          ##
+#################################################################
+
+cat("Capturing intermediate benefit data...\n")
+
+# Extract the salary_benefit_table and ann_factor_table from the benefit model
+# These contain per-cohort salary, PVFB, PVFS, NC rate, and AAL data
+for (class_name in classes) {
+  cat(sprintf("Extracting benefit data for class: %s\n", class_name))
+
+  # Run get_benefit_data to get intermediate tables
+  tryCatch({
+    benefit_data <- get_benefit_data(class_name = class_name)
+
+    # benefit_data should be a list with components
+    # Save the main benefit table (salary, PVFB, PVFS, NC, etc.)
+    if (!is.null(benefit_data)) {
+      # Save a summary version with key columns per entry_year/entry_age/yos
+      # (full table is too large - millions of rows)
+      benefit_summary <- benefit_data %>%
+        filter(yos == 0 | term_age == entry_age + yos) %>%
+        select(any_of(c(
+          "entry_year", "entry_age", "yos", "term_age",
+          "tier_at_term_age", "salary", "fas", "ben_mult",
+          "reduce_factor", "db_benefit", "ann_factor_term",
+          "pvfb_db_at_term_age", "pvfb_db_wealth_at_term_age",
+          "pvfb_db_wealth_at_current_age", "pvfs_at_current_age",
+          "indv_norm_cost", "pvfnc_db",
+          "separation_rate", "remaining_prob"
+        ))) %>%
+        # Keep only a representative sample per entry_year/entry_age
+        filter(entry_year >= 2000)  # Recent cohorts only to keep file size manageable
+
+      write_csv(
+        benefit_summary,
+        paste0("../../baseline_outputs/", gsub(" ", "_", class_name), "_benefit_data.csv")
+      )
+      cat(sprintf("Saved %s benefit data (%d rows)\n", class_name, nrow(benefit_summary)))
+    }
+  }, error = function(e) {
+    cat(sprintf("Error extracting benefit data for %s: %s\n", class_name, e$message))
+  })
+}
+
+cat("Benefit data captured.\n")
+
+#################################################################
 ##                   Capture Funding Data                        ##
 #################################################################
 
@@ -636,6 +702,116 @@ for (class_name in names(funding_data)) {
 }
 
 cat("Funding data captured.\n")
+
+#################################################################
+##                   Capture Salary/Headcount Distribution Files ##
+#################################################################
+
+cat("Capturing salary/headcount distribution files from extracted inputs...\n")
+
+# Define the mapping of class names to file names
+distribution_files <- list(
+  admin = "salary and headcount distribution of admin.xlsx",
+  eco = "salary and headcount distribution of eco.xlsx",
+  eso = "salary and headcount distribution of eso.xlsx",
+  judges = "salary and headcount distribution of judges.xlsx",
+  senior_management = "salary and headcount distribution of senior management.xlsx"
+)
+
+# Function to parse distribution Excel file
+parse_distribution_file <- function(file_path, class_name) {
+  cat(sprintf("Processing distribution file for: %s\n", class_name))
+
+  # Read the Excel file (col_names = FALSE means no header row)
+  df <- read_excel(file_path, col_names = FALSE)
+
+  # Find the header row (contains "Age" and "Years of Service" indicators)
+  header_row <- which(grepl("Age", df[[1]], ignore.case = TRUE))[1]
+
+  if (is.na(header_row)) {
+    cat(sprintf("Warning: Could not find header row for %s\n", class_name))
+    return(NULL)
+  }
+
+  # Extract count data (typically rows after header)
+  count_start <- header_row + 1
+  count_end <- count_start + 13 # Typically 13 age groups
+
+  # Extract salary data (typically after count data)
+  salary_start <- count_end + 3 # Skip blank rows and "Avg. Annual Salary" row
+  salary_end <- salary_start + 13
+
+  # Get YOS headers from header row
+  yos_headers <- as.character(df[header_row, -1])
+  yos_headers <- yos_headers[!is.na(yos_headers) & yos_headers != ""]
+
+  # Extract count data
+  count_data <- df[count_start:count_end, ]
+  colnames(count_data) <- c("age_group", yos_headers, "all_years")
+
+  # Clean age groups
+  count_data$age_group <- as.character(count_data$age_group)
+  count_data <- count_data[!is.na(count_data$age_group), ]
+
+  # Add data type indicator
+  count_data$data_type <- "count"
+
+  # Extract salary data
+  salary_data <- df[salary_start:salary_end, ]
+  if (ncol(salary_data) == ncol(count_data) - 1) {
+    colnames(salary_data) <- c("age_group", yos_headers, "all_years")
+    salary_data$age_group <- as.character(salary_data$age_group)
+    salary_data <- salary_data[!is.na(salary_data$age_group), ]
+    salary_data$data_type <- "salary"
+  } else {
+    salary_data <- NULL
+  }
+
+  return(list(
+    count = count_data,
+    salary = salary_data
+  ))
+}
+
+# Process each distribution file
+for (class_name in names(distribution_files)) {
+  file_name <- distribution_files[[class_name]]
+  file_path <- file.path("Reports/extracted inputs", file_name)
+
+  if (file.exists(file_path)) {
+    cat(sprintf("Found distribution file for %s\n", class_name))
+
+    dist_data <- parse_distribution_file(file_path, class_name)
+
+    if (!is.null(dist_data)) {
+      # Save count distribution
+      if (!is.null(dist_data$count)) {
+        write_csv(
+          dist_data$count,
+          paste0("../../baseline_outputs/", class_name, "_dist_count.csv")
+        )
+        cat(sprintf("Saved %s count distribution\n", class_name))
+      }
+
+      # Save salary distribution
+      if (!is.null(dist_data$salary)) {
+        write_csv(
+          dist_data$salary,
+          paste0("../../baseline_outputs/", class_name, "_dist_salary.csv")
+        )
+        cat(sprintf("Saved %s salary distribution\n", class_name))
+      }
+    }
+  } else {
+    cat(sprintf(
+      "Distribution file not found for %s: %s\n",
+      class_name,
+      file_path
+    ))
+  }
+}
+
+cat("Salary/headcount distribution files captured.\n")
 
 #################################################################
 ##                   Summary Report                              ##

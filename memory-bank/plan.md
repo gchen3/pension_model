@@ -1,5 +1,22 @@
 # Florida FRS Pension Model Migration Plan
 
+## Current Status (Updated 2026-03-30)
+
+**IMPORTANT: The phase completion markers below are OUTDATED. See this section for honest status.**
+
+| Component | Real Status | Notes |
+|-----------|-------------|-------|
+| Workforce Projection | **VALIDATED** | 100% match on all 7 classes (active counts) |
+| Benefit Calculation | **Bugs Fixed, Not Validated** | Column name bugs fixed, needs R baseline comparison |
+| Liability Calculation | **Bugs Fixed, Not Validated** | Dict indexing, lambda, mortality bugs all fixed |
+| Funding Calculation | **30% Framework Only** | Only has AAL roll-forward; missing assets, amortization, contributions |
+| Validation Module | **Stubbed** | All comparisons set python_value = r_value |
+| Test Suite | **Empty** | Directories exist, zero test implementations |
+
+**Next Priority:** Validate benefit/liability calculations against R baseline `{class}_liability.csv` files.
+
+---
+
 ## Project Overview
 
 **Goal:** Migrate the Florida FRS pension simulation model from R to Python, creating a general-purpose, well-structured pension modeling framework.
