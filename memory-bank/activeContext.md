@@ -1,7 +1,113 @@
 # Active Context
 
 **Session Date:** 2026-03-30
-**Current Phase:** Phase A Complete - Workforce Validated, Bug Fixes Applied, Moving to Phase B (Benefit/Liability Validation)
+**Current Phase:** Phase B COMPLETE - All Liability Components Validated
+
+---
+
+## Session Update (2026-03-30 - Projected Liability Validation COMPLETE)
+
+### What Was Accomplished This Session
+
+**Phase B: Benefit/Liability - FULLY VALIDATED**
+
+1. **Extracted R benefit_table intermediate data** via `scripts/extract_liability_data.R`
+   - `{class}_bt_term.csv` - cum_mort_dr for term vested discount
+   - `{class}_bvt_term.csv` - pvfb_db_at_term_age from benefit_val_table
+   - `{class}_bt_refund.csv` - db_ee_balance for refund calculations
+   - `{class}_bt_retire.csv` - db_benefit, cola for projected retirees
+   - `{class}_af_retire.csv` - ann_factor for projected retiree PVFB
+   - `{class}_proj_components.csv` - per-year aggregated liability components
+
+2. **Validated ALL projected liability components** (all 7 classes, 0.00% diff):
+   - `aal_term_db_legacy_est` - term vested projected: 0.00%
+   - `aal_term_db_new_est` - term vested new: 0.00%
+   - `refund_db_legacy_est` - refund legacy: 0.00%
+   - `refund_db_new_est` - refund new: 0.00%
+   - `retire_ben_db_legacy_est` - retire benefit legacy: 0.00%
+   - `retire_ben_db_new_est` - retire benefit new: 0.00%
+   - `aal_retire_db_legacy_est` - retire AAL legacy: 0.00%
+   - `aal_retire_db_new_est` - retire AAL new: 0.00%
+
+3. **Validated total AAL aggregation** (all 7 classes, 0.00% diff):
+   - `aal_legacy_est`: 0.00%
+   - `aal_new_est`: 0.00%
+   - `total_aal_est`: 0.00%
+   - `tot_ben_refund_legacy_est`: 0.00%
+   - `tot_ben_refund_new_est`: 0.00%
+   - Liability gain/loss = 0.0 (confirms experience = assumptions)
+
+### Phase B Complete Validation Summary
+
+| Component | Status | Max Diff |
+|-----------|--------|----------|
+| Active payroll DB legacy | VALIDATED | 0.00% |
+| Active PVFB DB legacy | VALIDATED | 0.00% |
+| Active PVFNC DB legacy | VALIDATED | 0.00% |
+| Active AAL DB legacy | VALIDATED | 0.00% |
+| Active NC rate | VALIDATED | 0.00% |
+| Projected term AAL (legacy+new) | VALIDATED | 0.00% |
+| Projected retire AAL (legacy+new) | VALIDATED | 0.00% |
+| Projected refund (legacy+new) | VALIDATED | 0.00% |
+| Current retiree AAL | VALIDATED | 0.00% |
+| Current term vested AAL | VALIDATED | 0.00% |
+| Total AAL (all components) | VALIDATED | 0.00% |
+| Liability gain/loss | VALIDATED | 0.0 |
+
+### End-to-End Pipeline (2026-03-30)
+
+**Built and validated**: Raw inputs → benefit tables → liability output
+- All 7 classes: **0.0000%** diff vs R baseline
+- Pipeline time: ~5 min for all classes
+- 17 unit tests, all passing
+
+**Key modules created:**
+- `src/pension_model/core/model_constants.py` — All R constants in frozen dataclasses
+- `src/pension_model/core/tier_logic.py` — Tier, benefit multiplier, reduction factor logic
+- `src/pension_model/core/benefit_tables.py` — 8 table-building functions (salary→FAS→benefit→PVFB→NC)
+- `src/pension_model/core/pipeline.py` — End-to-end orchestrator
+- `tests/test_pension_model/test_benefit_tables.py` — 17 tests against R extractions
+
+**Computation chain:**
+1. salary_headcount_table (raw salary/headcount CSV → long format with entry_salary)
+2. salary_benefit_table (salary projection, FAS, db_ee_balance per cohort)
+3. separation_rate_table (withdrawal + retirement rates by tier)
+4. ann_factor_table (cumulative survival × discount × COLA from mortality table)
+5. benefit_table (db_benefit, pvfb_db_at_term_age)
+6. benefit_val_table (PVFB, PVFS, NC via EAN method)
+7. Liability aggregation (join workforce flows with benefit tables, aggregate by year)
+
+**Bug found and fixed:** Admin's early retirement reduction factor used wrong NRA (55 instead of 62). R checks `class_name == "special"` only, not `class_name in ("special", "admin")`.
+
+### Phase C: Funding Model (In Progress - 2026-03-30)
+
+**Built:** `src/pension_model/core/funding_model.py` — full year-by-year funding projection
+- Payroll projection (growth at payroll_growth assumption)
+- Benefit payments/refunds from liability model
+- Normal cost projection
+- AAL roll-forward: AAL[t] = AAL[t-1]*(1+dr) + (NC-benefits-refunds)*(1+dr)^0.5 + gain/loss
+- MVA projection: MVA[t] = MVA[t-1]*(1+ROA) + net_cf*(1+ROA)^0.5
+- AVA smoothing: expected + 20% of (MVA-expected), bounded 80%-120% of MVA
+- DROP: makeshift model tied to Regular class ratios
+- FRS system: sum across all classes
+- UAAL amortization: layered with declining periods
+- Employer contributions: NC + amortization + admin + DC + solvency
+
+**Current status:** AAL roll-forward close (~0.08% drift), but contributions diverge due to missing NC calibration factor. Next: implement nc_cal.
+
+### What Remains
+
+- NC rate calibration (nc_cal = val_norm_cost / model_norm_cost) — fixes contribution chain
+- Debug AVA divergence (follows from NC fix)
+- Validate all funding outputs against R for all 7 classes + DROP + FRS
+
+### Key Technical Findings
+
+1. **FAS uses lagged window**: R's `baseR.rollmean` computes FAS at yos=t as avg of salary[t-5:t], NOT salary[t-4:t+1]
+2. **DB/DC allocation is 3-tier**: before_2018 (75% DB), after_2018 (25% DB), new>=2024 (0% to legacy, 25% to new)
+3. **ben_payment_ratio**: R model input uses 0.9358, NOT 0.9602574 from calibration JSON
+4. **Calibration factors**: cal_factor=0.9 applied to db_benefit globally; per-class NC factors are derived ratios
+5. **Current retirees**: Projected using ann_factor_retire_table with mortality and COLA; PVFB = avg_ben * (ann_factor - 1)
 
 ---
 

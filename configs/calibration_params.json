@@ -107,14 +107,15 @@
   },
 
   "benefit_payments_current": {
-    "description": "Estimated benefit payments for each class",
-    "ben_payment_ratio": 0.9602574,
-    "regular": 8611529957.45,
-    "special": 2327056541.80,
-    "admin": 7773287.16,
-    "judges": 101643980.68,
-    "eso": 51399735.69,
-    "eco": 9069350.80,
-    "senior_management": 325298970.66
+    "description": "Estimated benefit payments for each class (outflow * ben_payment_ratio)",
+    "ben_payment_ratio": 0.9358391148451025,
+    "ben_payment_ratio_formula": "pension_payment / (pension_payment + contribution_refunds + disbursement_to_ip + admin_expense)",
+    "regular": 8391759183.371059,
+    "special": 2267978019.653661,
+    "admin": 7570938.439096879,
+    "eco": 8836192.922367457,
+    "eso": 50091724.461198956,
+    "judges": 99052955.27166504,
+    "senior_management": 316935017.9899018
   }
 }
