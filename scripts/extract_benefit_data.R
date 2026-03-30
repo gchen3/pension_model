@@ -41,7 +41,6 @@ for (class_name in classes) {
 
       # Save a filtered version (recent entry years, key columns)
       bvt_save <- bvt %>%
-        filter(entry_year >= 2000) %>%
         select(any_of(c(
           "entry_year", "entry_age", "yos", "term_age",
           "tier_at_term_age", "salary", "fas", "ben_mult",
@@ -66,7 +65,7 @@ for (class_name in classes) {
     if (!is.null(benefit_data$indv_norm_cost_table)) {
       inc <- benefit_data$indv_norm_cost_table
       cat(sprintf("  indv_norm_cost_table: %d rows\n", nrow(inc)))
-      inc_save <- inc %>% filter(entry_year >= 2000)
+      inc_save <- inc
       write_csv(inc_save, sprintf("../../baseline_outputs/%s_indv_norm_cost.csv", class_name))
     }
 
