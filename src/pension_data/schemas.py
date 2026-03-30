@@ -218,3 +218,61 @@ class FundingData(BaseModel):
 
     class Config:
         validate_assignment = True
+
+
+class WorkforceProjection(BaseModel):
+    """
+    Workforce projection result for a single year/age/entry_age combination.
+
+    Used for tracking workforce population through projection period.
+    """
+    year: int = Field(ge=1900, description="Projection year")
+    entry_age: int = Field(ge=18, description="Entry age")
+    age: int = Field(ge=18, description="Current age")
+    yos: Optional[int] = Field(None, ge=0, description="Years of service")
+    n_active: float = Field(ge=0, description="Number of active members")
+    n_term: Optional[float] = Field(None, ge=0, description="Number of terminated members")
+    n_refund: Optional[float] = Field(None, ge=0, description="Number of refunded members")
+    n_retire: Optional[float] = Field(None, ge=0, description="Number of retired members")
+    term_year: Optional[int] = Field(None, ge=1900, description="Termination year")
+    retire_year: Optional[int] = Field(None, ge=1900, description="Retirement year")
+
+    class Config:
+        validate_assignment = True
+
+
+class LiabilityResult(BaseModel):
+    """
+    Liability calculation result for a single year.
+
+    Aggregate liability metrics for reporting and validation.
+    """
+    year: int = Field(ge=1900, description="Valuation year")
+    aal: float = Field(ge=0, description="Accrued actuarial liability")
+    nc: float = Field(ge=0, description="Normal cost")
+    pvfb: float = Field(ge=0, description="Present value of future benefits")
+    pvfs: Optional[float] = Field(None, ge=0, description="Present value of future service")
+    payroll: Optional[float] = Field(None, ge=0, description="Total payroll")
+    nc_rate: Optional[float] = Field(None, ge=0, description="Normal cost rate (NC/payroll)")
+
+    class Config:
+        validate_assignment = True
+
+
+class FundingResult(BaseModel):
+    """
+    Funding calculation result for a single year.
+
+    Aggregate funding metrics for reporting and validation.
+    """
+    year: int = Field(ge=1900, description="Valuation year")
+    aal: float = Field(ge=0, description="Accrued actuarial liability")
+    ava: float = Field(ge=0, description="Actuarial value of assets")
+    mva: float = Field(ge=0, description="Market value of assets")
+    funded_ratio: Optional[float] = Field(None, ge=0, description="Funded ratio (AVA/AAL)")
+    unfunded_liability: Optional[float] = Field(None, description="Unfunded liability (AAL - AVA)")
+    required_contribution: Optional[float] = Field(None, ge=0, description="Required contribution")
+    amortization_payment: Optional[float] = Field(None, ge=0, description="Amortization payment")
+
+    class Config:
+        validate_assignment = True

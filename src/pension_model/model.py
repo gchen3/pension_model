@@ -12,16 +12,11 @@ Key Design Principles:
 from typing import Dict, List, Optional
 import pandas as pd
 
-from pension_config.plan import MembershipClass, PlanConfig
+from pension_config import MembershipClass, PlanConfig
+from pension_config.adapters import PlanAdapter
 from pension_data.loaders import ExcelLoader, CSVLoader
-from pension_data.schemas import (
-    SalaryHeadcountRecord,
-    MortalityRate,
-    WithdrawalRate,
-    RetirementEligibility,
-    SalaryGrowthRate,
-    EntrantProfile
-)
+# Note: Import actual schema names from pension_data.schemas
+# (Some may not exist yet, using DataFrame directly where needed)
 from pension_model.core import (
     WorkforceProjector,
     WorkforceState,
@@ -52,9 +47,14 @@ class PensionModel:
         self.start_year = config.start_year
         self.model_period = config.model_period
 
-        # Initialize calculators
-        self.workforce_projector = WorkforceProjector(config)
-        self.benefit_calculator = BenefitCalculator(config)
+        # Import adapter for FRS
+        from pension_config.frs_adapter import FRSAdapter
+
+        self.adapter = FRSAdapter(config)
+
+        # Initialize calculators with adapter
+        self.workforce_projector = WorkforceProjector(self.adapter)
+        self.benefit_calculator = BenefitCalculator(self.adapter)
         self.liability_calculator = LiabilityCalculator(config)
         self.funding_calculator = FundingCalculator(config)
 
@@ -116,7 +116,8 @@ class PensionModel:
         self,
         class_name: MembershipClass,
         data: Dict[str, pd.DataFrame],
-        pop_growth: float
+        pop_growth: float,
+        gender: str = 'male'
     ) -> Dict[int, WorkforceState]:
         """
         Run workforce projection for a membership class.
@@ -125,14 +126,23 @@ class PensionModel:
             class_name: Membership class
             data: Input data tables
             pop_growth: Population growth rate
+            gender: Gender for loading gender-specific tables
 
         Returns:
             Dictionary mapping year to workforce state
         """
         salary_headcount = data['salary_headcount']
-        mort_table = data['mortality']
-        sep_table = data['withdrawal']
         entrant_profile = data['entrant_profile']
+
+        # Load decrement tables from adapter (uses extracted baseline tables)
+        mort_table = self.adapter.load_mortality_table(class_name)
+        sep_table = self.adapter.load_withdrawal_table(class_name, gender)
+
+        # Fallback to loaded data if adapter tables not available
+        if mort_table is None:
+            mort_table = data.get('mortality', pd.DataFrame())
+        if sep_table is None:
+            sep_table = data.get('withdrawal', pd.DataFrame())
 
         # Create benefit decisions table (simplified)
         # In full implementation, this would be calculated from benefit model

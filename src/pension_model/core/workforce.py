@@ -16,16 +16,16 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 
-from pension_config.plan import MembershipClass
+from pension_config.types import MembershipClass
 from pension_config.adapters import PlanAdapter
+from pension_config.plan import PlanConfig
 from pension_data.schemas import (
-    WorkforceProjection,
     MortalityRate,
     WithdrawalRate,
     RetirementEligibility,
-    EntrantProfile,
-    SalaryHeadcountRecord,
+    EntrantProfile
 )
+# Note: Some schemas may use DataFrame directly where Pydantic models don't exist yet
 
 from pension_tools.mortality import qx
 
@@ -270,16 +270,22 @@ class WorkforceProjector:
             prev_state.active, sep_table, prev_state.year
         )
 
+        # Track pre-decrement population for new entrant calculation
+        pre_decrement_total = prev_state.active['n_active'].sum()
+
         # 2. Active aging (shift by 1 year)
         active_aged = self._age_active_population(
             prev_state.active, active2term
         )
 
-        # 3. Add new entrants
+        # Track post-decrement population for new entrant calculation
+        post_decrement_total = active_aged['n_active'].sum()
+
+        # 3. Add new entrants (R model formula: sum(wf1)*(1+g) - sum(wf2))
         new_entrants = self._calculate_new_entrants(
-            active_aged, entrant_profile, pop_growth
+            pre_decrement_total, post_decrement_total, entrant_profile, pop_growth
         )
-        active_new = active_aged + new_entrants
+        active_new = pd.concat([active_aged, new_entrants], ignore_index=True)
 
         # 4. Terminated aging and death
         term_aged = self._age_terminated_population(
@@ -362,19 +368,29 @@ class WorkforceProjector:
 
     def _calculate_new_entrants(
         self,
-        active: pd.DataFrame,
+        pre_decrement_total: float,
+        post_decrement_total: float,
         entrant_profile: pd.DataFrame,
         pop_growth: float
     ) -> pd.DataFrame:
-        """Calculate new entrants based on population growth."""
-        # Get total active population
-        total_active = active['n_active'].sum()
+        """
+        Calculate new entrants to maintain population equilibrium.
 
-        # Calculate target population with growth
-        target_pop = total_active * (1 + pop_growth)
+        Uses R model formula: ne = sum(wf1)*(1 + g) - sum(wf2)
+        Where wf1 = pre-decrement population, wf2 = post-decrement population
 
-        # New entrants needed
-        new_entrants_needed = target_pop - total_active
+        Args:
+            pre_decrement_total: Total active BEFORE separations
+            post_decrement_total: Total active AFTER separations
+            entrant_profile: Distribution of new entrants by entry age
+            pop_growth: Population growth rate (typically 0 for R baseline)
+
+        Returns:
+            DataFrame with new entrants by entry age
+        """
+        # R model formula: new entrants = pre_decrement * (1 + growth) - post_decrement
+        # When growth=0, this gives exact replacement for separations
+        new_entrants_needed = pre_decrement_total * (1 + pop_growth) - post_decrement_total
 
         # Distribute by entry age based on entrant profile
         result = []

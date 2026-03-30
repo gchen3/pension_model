@@ -18,11 +18,19 @@ from .comparators import (
     ComparisonSummary,
     validate_model_outputs
 )
+from .actuarial_validation import (
+    ActuarialValidator,
+    ValidationResult,
+    run_actuarial_validation
+)
 
 __all__ = [
     'Validator',
     'ValidationConfig',
     'ComparisonResult',
     'ComparisonSummary',
-    'validate_model_outputs'
+    'validate_model_outputs',
+    'ActuarialValidator',
+    'ValidationResult',
+    'run_actuarial_validation'
 ]

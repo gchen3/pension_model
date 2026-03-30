@@ -5,11 +5,13 @@ This adapter provides FRS-specific business rules, benefit formulas,
 and data transformations for the general pension model.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass
+import pandas as pd
 
 from .adapters import BasePlanAdapter, PlanRegistry
 from .types import MembershipClass, Tier
+from pension_data.decrement_loader import DecrementLoader
 
 
 class FRSAdapter(BasePlanAdapter):
@@ -22,6 +24,32 @@ class FRSAdapter(BasePlanAdapter):
     - COLA rates
     - DB/DC split ratios
     """
+
+    def __init__(self, config: Union[Dict[str, Any], 'PlanConfig'], baseline_dir: str = "baseline_outputs"):
+        """
+        Initialize FRS adapter with configuration and decrement table loader.
+
+        Args:
+            config: Either a PlanConfig object or a dictionary with config values
+            baseline_dir: Directory containing baseline output files (decrement tables)
+        """
+        # Handle both PlanConfig and dict
+        if hasattr(config, '__dataclass_fields__'):
+            # It's a PlanConfig dataclass
+            self._config_obj = config
+            self.config = config.to_dict() if hasattr(config, 'to_dict') else {}
+        else:
+            # It's a dict
+            self._config_obj = None
+            self.config = config if config else {}
+
+        # Initialize decrement loader for accessing extracted tables
+        self.decrement_loader = DecrementLoader(baseline_dir)
+
+        # Cache for loaded tables by membership class
+        self._withdrawal_tables: Dict[str, pd.DataFrame] = {}
+        self._retirement_tables: Dict[str, pd.DataFrame] = {}
+        self._mortality_tables: Dict[str, pd.DataFrame] = {}
 
     @property
     def plan_name(self) -> str:
@@ -273,6 +301,34 @@ class FRSAdapter(BasePlanAdapter):
         # Default fallback
         return 0.045  # 4.5%
 
+    def load_withdrawal_table(
+        self,
+        membership_class: MembershipClass,
+        gender: Optional[str] = None
+    ) -> Optional[pd.DataFrame]:
+        """
+        Load withdrawal table for a membership class.
+
+        Args:
+            membership_class: The membership class
+            gender: 'male' or 'female' (required for some classes)
+
+        Returns:
+            DataFrame with withdrawal rates
+        """
+        class_key = membership_class.value
+        cache_key = f"{class_key}_{gender}" if gender else class_key
+
+        if cache_key in self._withdrawal_tables:
+            return self._withdrawal_tables[cache_key]
+
+        # Load from decrement loader
+        table = self.decrement_loader.load_withdrawal_table(class_key, gender)
+        if table is not None:
+            self._withdrawal_tables[cache_key] = table
+
+        return table
+
     def get_withdrawal_rate(
         self,
         membership_class: MembershipClass,
@@ -283,17 +339,25 @@ class FRSAdapter(BasePlanAdapter):
         """
         Get FRS withdrawal/termination rate for a given class, age, and YOS.
 
-        FRS withdrawal rates vary by age and YOS.
+        Uses loaded decrement tables from baseline outputs.
         """
-        withdrawal_rates = self.config.get('withdrawal_rates', {})
+        # Load table for this class/gender
+        table = self.load_withdrawal_table(membership_class, gender)
 
+        if table is not None:
+            # Use decrement loader's lookup method
+            return self.decrement_loader.get_withdrawal_rate(
+                table,
+                int(age),
+                int(years_of_service)
+            )
+
+        # Fallback to config if table not available
+        withdrawal_rates = self.config.get('withdrawal_rates', {})
         class_key = membership_class.value
 
         if class_key in withdrawal_rates:
             class_rates = withdrawal_rates[class_key]
-
-            # Find appropriate age/YOS band
-            # This is a simplified lookup - actual implementation may need interpolation
             for rate_entry in class_rates:
                 if (rate_entry.get('age_min', 0) <= age <= rate_entry.get('age_max', 100) and
                     rate_entry.get('yos_min', 0) <= years_of_service <= rate_entry.get('yos_max', 50)):
@@ -301,6 +365,58 @@ class FRSAdapter(BasePlanAdapter):
 
         # Default fallback
         return 0.05  # 5%
+
+    def load_mortality_table(
+        self,
+        membership_class: MembershipClass
+    ) -> Optional[pd.DataFrame]:
+        """
+        Load mortality table for a membership class.
+
+        Args:
+            membership_class: The membership class
+
+        Returns:
+            DataFrame with mortality rates
+        """
+        class_key = membership_class.value
+
+        if class_key in self._mortality_tables:
+            return self._mortality_tables[class_key]
+
+        # Load from decrement loader
+        table = self.decrement_loader.load_mortality_table(class_key)
+        if table is not None:
+            self._mortality_tables[class_key] = table
+
+        return table
+
+    def load_retirement_table(
+        self,
+        tier: Tier,
+        retirement_type: str = 'normal'
+    ) -> Optional[pd.DataFrame]:
+        """
+        Load retirement table for a tier.
+
+        Args:
+            tier: The tier
+            retirement_type: 'normal', 'early', or 'drop'
+
+        Returns:
+            DataFrame with retirement rates
+        """
+        cache_key = f"{tier.value}_{retirement_type}"
+
+        if cache_key in self._retirement_tables:
+            return self._retirement_tables[cache_key]
+
+        # Load from decrement loader
+        table = self.decrement_loader.load_retirement_table(tier.value, retirement_type)
+        if table is not None:
+            self._retirement_tables[cache_key] = table
+
+        return table
 
     def get_mortality_rate(
         self,
@@ -312,10 +428,23 @@ class FRSAdapter(BasePlanAdapter):
         """
         Get FRS mortality rate (qx) for a given class, age, and gender.
 
-        FRS uses separate mortality tables for active and retired members.
+        Uses loaded decrement tables from baseline outputs.
         """
-        mortality_tables = self.config.get('mortality', {})
+        # Load table for this class
+        table = self.load_mortality_table(membership_class)
 
+        if table is not None:
+            # Use decrement loader's lookup method
+            # Note: Mortality tables typically have complex structure with entry_year, entry_age, etc.
+            # For now, use a simplified lookup by age
+            matches = table[
+                (table['dist_age'] == int(age))
+            ]
+            if len(matches) > 0:
+                return matches['mort_final'].iloc[0]
+
+        # Fallback to config if table not available
+        mortality_tables = self.config.get('mortality', {})
         class_key = membership_class.value
         table_key = f"{class_key}_{'retired' if is_retired else 'active'}"
 
@@ -325,7 +454,6 @@ class FRSAdapter(BasePlanAdapter):
 
             if gender_key in table:
                 gender_table = table[gender_key]
-                # Find appropriate age
                 age_int = int(age)
                 if age_int in gender_table:
                     return gender_table[age_int]
