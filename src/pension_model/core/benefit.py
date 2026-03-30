@@ -34,18 +34,22 @@ from pension_tools.salary import (
     cumulative_salary_growth,
     projected_salary
 )
-from pension_tools.mortality import complement_of_survival
-from pension_tools.retirement import (
-    is_normal_retirement_eligible,
-    is_early_retirement_eligible,
-    early_retirement_factor
-)
-from pension_tools.benefit import (
-    normal_cost,
-    accrued_liability,
-    pvfb,
-    pvfs
-)
+# Note: complement_of_survival not yet implemented in mortality.py
+# Using inline calculation for now
+# Note: Some retirement functions not yet implemented
+# from pension_tools.retirement import (
+#     is_normal_retirement_eligible,
+#     is_early_retirement_eligible,
+#     early_retirement_factor
+# )
+# Note: pension_tools.benefit functions not imported to avoid circular dependencies
+# Calculations done inline in BenefitCalculator class
+# from pension_tools.benefit import (
+#     normal_cost,
+#     accrued_liability,
+#     pvfb,
+#     pvfs
+# )
 
 
 @dataclass
@@ -160,13 +164,17 @@ class BenefitCalculator:
         years = np.arange(len(ages))
 
         # Get mortality rates for each age
+        # Mortality tables use 'dist_age' and 'dist_year' columns
+        age_col = 'dist_age' if 'dist_age' in mort_table.columns else 'age'
+        year_col = 'dist_year' if 'dist_year' in mort_table.columns else 'year'
+
         mort_rates = []
         for i, a in enumerate(ages):
             # Find mortality rate for this age and year
             dist_year = year + i
             match = mort_table[
-                (mort_table['age'] == a) &
-                (mort_table['year'] == dist_year)
+                (mort_table[age_col] == a) &
+                (mort_table[year_col] == dist_year)
             ]
             if len(match) > 0:
                 mort_rates.append(match['mort_final'].iloc[0])
@@ -347,6 +355,7 @@ class BenefitCalculator:
         self,
         benefit: float,
         entry_age: int,
+        entry_year: int,
         current_age: int,
         current_year: int,
         dr: float,
@@ -359,6 +368,7 @@ class BenefitCalculator:
         Args:
             benefit: Annual benefit
             entry_age: Age at entry
+            entry_year: Year of plan entry
             current_age: Current age
             current_year: Current year
             dr: Discount rate
@@ -530,3 +540,51 @@ class BenefitCalculator:
             })
 
         return pd.DataFrame(results)
+
+
+def calculate_benefit_table(
+    config: 'PlanConfig',
+    class_name: MembershipClass,
+    salary_headcount: pd.DataFrame,
+    mort_table: pd.DataFrame,
+    salary_growth_table: pd.DataFrame,
+    dr_current: float,
+    dr_new: float,
+    cola_rate_active: float,
+    cola_rate_retire: float
+) -> pd.DataFrame:
+    """
+    Convenience function to calculate benefit table.
+
+    Args:
+        config: Plan configuration
+        class_name: Membership class
+        salary_headcount: Salary/headcount data
+        mort_table: Mortality rate table
+        salary_growth_table: Salary growth rate table
+        dr_current: Current discount rate
+        dr_new: New discount rate
+        cola_rate_active: COLA rate for active members
+        cola_rate_retire: COLA rate for retirees
+
+    Returns:
+        DataFrame with benefit calculations
+    """
+    from pension_config.adapters import PlanAdapter
+    from pension_config.frs_adapter import FRSAdapter
+
+    # Create adapter based on config
+    adapter = FRSAdapter(config)
+
+    calculator = BenefitCalculator(adapter)
+    return calculator.calculate_benefit_table(
+        {'new_hire_year': config.new_hire_year},
+        class_name,
+        salary_headcount,
+        mort_table,
+        salary_growth_table,
+        dr_current,
+        dr_new,
+        cola_rate_active,
+        cola_rate_retire
+    )

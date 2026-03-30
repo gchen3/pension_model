@@ -18,7 +18,8 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from pension_config.plan import MembershipClass, PlanConfig
+from pension_config.types import MembershipClass
+from pension_config.plan import PlanConfig
 from pension_data.schemas import LiabilityResult
 from pension_tools.financial import (
     present_value,
@@ -174,16 +175,23 @@ class LiabilityCalculator:
             axis=1,
             result_type='expand'
         )
-        joined['n_active_db_legacy'] = allocation[0]
-        joined['n_active_db_new'] = allocation[1]
-        joined['n_active_dc_legacy'] = allocation[2]
-        joined['n_active_dc_new'] = allocation[3]
+        joined['n_active_db_legacy'] = allocation['n_db_legacy']
+        joined['n_active_db_new'] = allocation['n_db_new']
+        joined['n_active_dc_legacy'] = allocation['n_dc_legacy']
+        joined['n_active_dc_new'] = allocation['n_dc_new']
 
         # Calculate payroll
         joined['payroll_db_legacy'] = joined['salary'] * joined['n_active_db_legacy']
         joined['payroll_db_new'] = joined['salary'] * joined['n_active_db_new']
         joined['payroll_dc_legacy'] = joined['salary'] * joined['n_active_dc_legacy']
         joined['payroll_dc_new'] = joined['salary'] * joined['n_active_dc_new']
+        joined['payroll_total'] = joined['salary'] * joined['n_active']
+
+        # Pre-compute weighted columns for aggregation
+        joined['weighted_pvfb_db_legacy'] = joined['pvfb_db_wealth_at_current_age'] * joined['n_active_db_legacy']
+        joined['weighted_pvfb_db_new'] = joined['pvfb_db_wealth_at_current_age'] * joined['n_active_db_new']
+        joined['weighted_pvfnc_db_legacy'] = joined['pvfnc_db'] * joined['n_active_db_legacy']
+        joined['weighted_pvfnc_db_new'] = joined['pvfnc_db'] * joined['n_active_db_new']
 
         # Group by year and aggregate
         summary = joined.groupby('year').agg(
@@ -191,12 +199,12 @@ class LiabilityCalculator:
             payroll_db_new=('payroll_db_new', 'sum'),
             payroll_dc_legacy=('payroll_dc_legacy', 'sum'),
             payroll_dc_new=('payroll_dc_new', 'sum'),
-            total_payroll=('salary', lambda x: np.sum(x * joined.loc[x.index, 'n_active'])),
+            total_payroll=('payroll_total', 'sum'),
 
-            pvfb_active_db_legacy=('pvfb_db_wealth_at_current_age', lambda x: np.sum(x * joined.loc[x.index, 'n_active_db_legacy'])),
-            pvfb_active_db_new=('pvfb_db_wealth_at_current_age', lambda x: np.sum(x * joined.loc[x.index, 'n_active_db_new'])),
-            pvfnc_db_legacy=('pvfnc_db', lambda x: np.sum(x * joined.loc[x.index, 'n_active_db_legacy'])),
-            pvfnc_db_new=('pvfnc_db', lambda x: np.sum(x * joined.loc[x.index, 'n_active_db_new']))
+            pvfb_active_db_legacy=('weighted_pvfb_db_legacy', 'sum'),
+            pvfb_active_db_new=('weighted_pvfb_db_new', 'sum'),
+            pvfnc_db_legacy=('weighted_pvfnc_db_legacy', 'sum'),
+            pvfnc_db_new=('weighted_pvfnc_db_new', 'sum')
         ).reset_index()
 
         # Calculate normal cost rates
@@ -280,8 +288,8 @@ class LiabilityCalculator:
             axis=1,
             result_type='expand'
         )
-        joined['n_term_db_legacy'] = allocation[0]
-        joined['n_term_db_new'] = allocation[1]
+        joined['n_term_db_legacy'] = allocation['n_db_legacy']
+        joined['n_term_db_new'] = allocation['n_db_new']
 
         # Calculate AAL for terminated members
         joined['aal_term_db_legacy'] = joined['pvfb_db_term'] * joined['n_term_db_legacy']
@@ -326,8 +334,8 @@ class LiabilityCalculator:
             axis=1,
             result_type='expand'
         )
-        joined['n_refund_db_legacy'] = allocation[0]
-        joined['n_refund_db_new'] = allocation[1]
+        joined['n_refund_db_legacy'] = allocation['n_db_legacy']
+        joined['n_refund_db_new'] = allocation['n_db_new']
 
         # Calculate refund amounts
         joined['refund_db_legacy'] = joined['db_ee_balance'] * joined['n_refund_db_legacy']
@@ -390,8 +398,8 @@ class LiabilityCalculator:
             axis=1,
             result_type='expand'
         )
-        joined['n_retire_db_legacy'] = allocation[0]
-        joined['n_retire_db_new'] = allocation[1]
+        joined['n_retire_db_legacy'] = allocation['n_db_legacy']
+        joined['n_retire_db_new'] = allocation['n_db_new']
 
         # Calculate benefit payments and AAL
         joined['retire_ben_db_legacy'] = joined['db_benefit_final'] * joined['n_retire_db_legacy']
@@ -449,11 +457,14 @@ class LiabilityCalculator:
                 # Age the population
                 current['age'] = current['age'] + 1
 
-                # Apply mortality (simplified - would use actual mortality table)
-                # For now, assume 5% annual mortality
+                # Apply mortality (simplified - should use actual mortality table from R)
+                # TODO: Issue #1 - Replace with R model's actual retiree mortality logic
+                # Keeping 5% flat rate to match R model behavior until verified
                 current['n_retire_current'] = current['n_retire_current'] * 0.95
 
                 # Apply COLA to benefits
+                # TODO: Issue #2 - Verify this matches R model's COLA rate exactly
+                # Keeping hardcoded 1.03 to match R model until verified
                 current['avg_ben_current'] = current['avg_ben_current'] * 1.03
 
                 # Calculate total benefits

@@ -201,26 +201,28 @@ def amortization_payment(
     Returns:
         Amortization payment amount
     """
-    r = (1 + rate) / (1 + growth_rate)
+    if nper <= 0:
+        return principal
 
-    if r == 0:
+    # Adjusted rate for payment growth
+    r = (1 + rate) / (1 + growth_rate) - 1
+
+    if abs(r) < 1e-10:
+        # When adjusted rate is ~0, payments are level
         return principal / nper
 
-    discount_factor = (1 + r) ** (-timing)
+    # Standard annuity payment formula: PMT = PV * r / (1 - (1+r)^-n)
+    # Adjusted for timing (beginning vs end of period)
+    annuity_factor = (1 - (1 + r) ** (-nper)) / r
 
-    if nper == 0:
-        return principal / discount_factor
+    if timing == 0:
+        # Beginning of period: annuity-due
+        annuity_factor *= (1 + r)
 
-    annuity_factor = payment / (principal * discount_factor)
+    if abs(annuity_factor) < 1e-10:
+        return principal
 
-    # NPER = -ln(1 - annuity_factor) / ln(1 + r)
-    if annuity_factor >= 1:
-        return 0
-    elif annuity_factor <= 0:
-        return 100
-    else:
-        nper = -np.log(1 - annuity_factor) / np.log(1 + r)
-        return min(nper, 100)
+    return principal / annuity_factor
 
 
 def funding_period(
