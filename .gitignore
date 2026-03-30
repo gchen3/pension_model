@@ -7,6 +7,7 @@ __pycache__/
 venv/
 env/
 .venv/
+*.egg-info/
 
 # IDE
 .vscode/
@@ -19,15 +20,48 @@ env/
 .Rhistory
 .RData
 .Ruserdata
-
-# Outputs
 *.rds
-*.xlsx
+
+# Default: ignore large data files
 *.csv
+*.xlsx
+
+# Stage 3 data: needed for end-to-end pipeline
+# Raw plan inputs (from Excel extraction)
+!baseline_outputs/*_salary.csv
+!baseline_outputs/*_headcount.csv
+!baseline_outputs/salary_growth_table.csv
+!baseline_outputs/retiree_distribution.csv
+!baseline_outputs/init_funding_data.csv
+!baseline_outputs/return_scenarios.csv
+!baseline_outputs/current_amort_layers.csv
+
+# R baseline outputs (for validation only)
+!baseline_outputs/*_funding.csv
+
+# R intermediate data (for per-step unit tests)
+!baseline_outputs/*_salary_headcount.csv
+!baseline_outputs/*_sep_rate.csv
+!baseline_outputs/*_bt_term.csv
+!baseline_outputs/*_af_retire.csv
+!baseline_outputs/*_benefit_data.csv
+!baseline_outputs/decrement_tables/*.csv
+
+# Raw Excel source data (mortality tables, FRS inputs, retirement rates)
+!R_model/R_model_original/pub-2010-headcount-mort-rates.xlsx
+!R_model/R_model_original/mortality-improvement-scale-mp-2018-rates.xlsx
+!R_model/R_model_original/Florida FRS inputs.xlsx
+!R_model/R_model_original/Reports/extracted inputs/*.xlsx
+
+# Config
 !configs/*.csv
 
-# Memory bank (optional - commit if desired)
+# Memory bank
 memory-bank/
 
-# Actuarial calculations (optional)
+# Actuarial calculations
 actuarial_calculations/
+
+# Temp/output
+docs/
+mathpix_output/

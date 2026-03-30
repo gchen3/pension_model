@@ -171,20 +171,40 @@ class TestSeparationRateTable:
 
 
 class TestAnnFactorTable:
-    """Test build_ann_factor_table against R's extracted cum_mort_dr and ann_factor."""
+    """Test build_ann_factor_table_compact against R's extracted cum_mort_dr and ann_factor."""
 
-    def test_cum_mort_dr_matches_r(self):
-        """Verify cum_mort_dr matches R for a subset of Regular class."""
-        from pension_model.core.benefit_tables import build_ann_factor_table
+    RAW_DIR = Path(__file__).parent.parent.parent / "R_model" / "R_model_original"
+
+    def _build_compact_aft(self):
+        """Build ann_factor_table from raw Excel for Regular, entry_year=2000 only."""
+        from pension_model.core.benefit_tables import (
+            build_ann_factor_table_compact, build_salary_headcount_table,
+            build_entrant_profile, build_salary_benefit_table,
+        )
+        from pension_model.core.mortality_builder import build_compact_mortality_from_excel
+        from pension_model.core.tier_logic import get_tier
         from pension_model.core.model_constants import frs_constants
 
         constants = frs_constants()
-        mort = pd.read_csv(BASELINE / "regular_mortality_rates.csv")
+        cm = build_compact_mortality_from_excel(
+            self.RAW_DIR / "pub-2010-headcount-mort-rates.xlsx",
+            self.RAW_DIR / "mortality-improvement-scale-mp-2018-rates.xlsx",
+            "regular",
+        )
+        sg = pd.read_csv(BASELINE / "salary_growth_table.csv")
+        sal = pd.read_csv(BASELINE / "regular_salary.csv")
+        hc = pd.read_csv(BASELINE / "regular_headcount.csv")
+        adj = constants.class_data["regular"].total_active_member / hc.iloc[:, 1:].sum().sum()
+        sh = build_salary_headcount_table(sal, hc, sg, "regular", adj, 2022)
+        ep = build_entrant_profile(sh)
+        sbt = build_salary_benefit_table(sh, ep, sg, "regular", constants, get_tier)
+        # Filter to single entry_year for speed
+        sbt_sub = sbt[sbt["entry_year"] == 2000].copy()
+        return build_ann_factor_table_compact(sbt_sub, cm, "regular", constants)
 
-        # Use a subset for speed: one entry_year
-        sample = mort[mort["entry_year"] == 2000].copy()
-        aft = build_ann_factor_table(sample, "regular", constants)
-
+    def test_cum_mort_dr_matches_r(self):
+        """Verify cum_mort_dr matches R for a subset of Regular class."""
+        aft = self._build_compact_aft()
         bt = pd.read_csv(BASELINE / "regular_bt_term.csv")
         bt_sub = bt[bt["entry_year"] == 2000]
 
@@ -204,13 +224,7 @@ class TestAnnFactorTable:
 
     def test_ann_factor_matches_r(self):
         """Verify ann_factor matches R for a subset of Regular class."""
-        from pension_model.core.benefit_tables import build_ann_factor_table
-        from pension_model.core.model_constants import frs_constants
-
-        constants = frs_constants()
-        mort = pd.read_csv(BASELINE / "regular_mortality_rates.csv")
-        sample = mort[mort["entry_year"] == 2000].copy()
-        aft = build_ann_factor_table(sample, "regular", constants)
+        aft = self._build_compact_aft()
 
         af = pd.read_csv(BASELINE / "regular_af_retire.csv")
         af_sub = af[af["entry_year"] == 2000]

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import numpy as np
 import pandas as pd
-from pension_model.core.pipeline import run_class_pipeline
+from pension_model.core.pipeline import run_class_pipeline, run_class_pipeline_e2e
 from pension_model.core.funding_model import load_funding_inputs, compute_funding
 from pension_model.core.model_constants import frs_constants
 
@@ -27,12 +27,13 @@ BASELINE = Path(__file__).parent.parent / "baseline_outputs"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 
 
-def run_pipeline():
+def run_pipeline(e2e=True):
     """Run liability + funding pipeline for all 7 classes."""
     constants = frs_constants()
+    pipeline_fn = run_class_pipeline_e2e if e2e else run_class_pipeline
     liability = {}
     for cn in CLASSES:
-        liability[cn] = run_class_pipeline(cn, BASELINE, constants)
+        liability[cn] = pipeline_fn(cn, BASELINE, constants)
     funding_inputs = load_funding_inputs(BASELINE)
     funding = compute_funding(liability, funding_inputs, constants)
     return liability, funding

@@ -1,0 +1,236 @@
+class,date,amo_period,amo_balance
+regular,"June 30, 1999",8,-221791000
+regular,"June 30, 2004",13,-2833606000
+regular,"June 30, 2009",18,5598025000
+regular,"June 30, 2009",18,34389532000
+regular,"June 30, 2009",18,-26975469000
+regular,"June 30, 2009",18,-1026693000
+regular,"June 30, 2010",19,1318278000
+regular,"June 30, 2010",19,-1673509000
+regular,"June 30, 2011",20,1436538000
+regular,"June 30, 2012",20,521637000
+regular,"June 30, 2013",20,1809136000
+regular,"June 30, 2014",20,628646000
+regular,"June 30, 2014",20,-1319221000
+regular,"June 30, 2015",20,790125000
+regular,"June 30, 2016",20,819689000
+regular,"June 30, 2016",20,1370249000
+regular,"June 30, 2017",20,1595900000
+regular,"June 30, 2017",20,-328407000
+regular,"June 30, 2018",20,1616206000
+regular,"June 30, 2018",20,-1171590000
+regular,"June 30, 2019",20,4249090000
+regular,"June 30, 2019",n/a,-1868850000
+regular,"June 30, 2019",20,-605354000
+regular,"June 30, 2020",20,2751033000
+regular,"June 30, 2020",20,1213591000
+regular,"June 30, 2021",20,3324397000
+regular,"June 30, 2021",20,-5164898000
+regular,"June 30, 2022",21,1620698000
+regular,"June 30, 2022",21,476777000
+special,"June 30, 1999",8,-67149000
+special,"June 30, 2000",9,-2036000
+special,"June 30, 2000",9,254277000
+special,"June 30, 2004",13,-578880000
+special,"June 30, 2009",18,549845000
+special,"June 30, 2009",18,7576732000
+special,"June 30, 2009",18,-2514164000
+special,"June 30, 2009",18,-191760000
+special,"June 30, 2010",19,-418829000
+special,"June 30, 2010",19,468009000
+special,"June 30, 2011",20,267715000
+special,"June 30, 2012",20,-581691000
+special,"June 30, 2013",20,517805000
+special,"June 30, 2014",20,1417072000
+special,"June 30, 2014",20,-923987000
+special,"June 30, 2015",20,-18232000
+special,"June 30, 2016",20,45643000
+special,"June 30, 2016",20,260892000
+special,"June 30, 2016",20,228317000
+special,"June 30, 2017",20,95208000
+special,"June 30, 2017",20,518831000
+special,"June 30, 2017",20,517661000
+special,"June 30, 2018",20,544118000
+special,"June 30, 2018",20,209409000
+special,"June 30, 2019",20,11889000
+special,"June 30, 2019",20,-26931000
+special,"June 30, 2019",n/a,-1380848000
+special,"June 30, 2019",20,128433000
+special,"June 30, 2020",20,889870000
+special,"June 30, 2020",20,248393000
+special,"June 30, 2021",20,1109225000
+special,"June 30, 2021",20,-1162865000
+special,"June 30, 2022",21,99285000
+special,"June 30, 2022",21,539523000
+special,"June 30, 2022",21,379132000
+eso,"June 30, 1999",8,4000
+eso,"June 30, 2004",13,32322000
+eso,"June 30, 2009",18,11792000
+eso,"June 30, 2009",18,242041000
+eso,"June 30, 2009",18,-59928000
+eso,"June 30, 2009",18,-7316000
+eso,"June 30, 2010",19,2143000
+eso,"June 30, 2010",19,306000
+eso,"June 30, 2011",20,14411000
+eso,"June 30, 2012",20,-5930000
+eso,"June 30, 2013",20,114821000
+eso,"June 30, 2014",20,-24551000
+eso,"June 30, 2014",20,-10908000
+eso,"June 30, 2015",20,-10912000
+eso,"June 30, 2016",20,3428000
+eso,"June 30, 2016",20,22609000
+eso,"June 30, 2017",20,7187000
+eso,"June 30, 2017",20,40666000
+eso,"June 30, 2018",20,7331000
+eso,"June 30, 2018",20,11226000
+eso,"June 30, 2019",20,-9010000
+eso,"June 30, 2019",n/a,-5367000
+eso,"June 30, 2019",20,-2139000
+eso,"June 30, 2020",20,12342000
+eso,"June 30, 2020",20,3651000
+eso,"June 30, 2021",20,14471000
+eso,"June 30, 2021",20,17382000
+eso,"June 30, 2022",21,7030000
+eso,"June 30, 2022",21,5837000
+eco,"June 30, 1999",8,2000
+eco,"June 30, 2004",13,1923000
+eco,"June 30, 2009",18,2028000
+eco,"June 30, 2009",18,62121000
+eco,"June 30, 2009",18,-35527000
+eco,"June 30, 2009",18,-806000
+eco,"June 30, 2010",19,2928000
+eco,"June 30, 2010",19,133000
+eco,"June 30, 2011",20,8722000
+eco,"June 30, 2012",20,-4126000
+eco,"June 30, 2013",20,19883000
+eco,"June 30, 2014",20,-3088000
+eco,"June 30, 2014",20,-952000
+eco,"June 30, 2015",20,-7589000
+eco,"June 30, 2016",20,642000
+eco,"June 30, 2016",20,10823000
+eco,"June 30, 2017",20,1302000
+eco,"June 30, 2017",20,4171000
+eco,"June 30, 2018",20,1345000
+eco,"June 30, 2018",20,2820000
+eco,"June 30, 2019",20,-2827000
+eco,"June 30, 2019",n/a,-738000
+eco,"June 30, 2019",20,1048000
+eco,"June 30, 2020",20,2490000
+eco,"June 30, 2020",20,4096000
+eco,"June 30, 2021",20,2618000
+eco,"June 30, 2021",20,-1379000
+eco,"June 30, 2022",21,1296000
+eco,"June 30, 2022",21,1620000
+judges,"June 30, 1999",8,31000
+judges,"June 30, 2004",13,25536000
+judges,"June 30, 2009",18,20209000
+judges,"June 30, 2009",18,511245000
+judges,"June 30, 2009",18,-277331000
+judges,"June 30, 2009",18,-25541000
+judges,"June 30, 2010",19,-22492000
+judges,"June 30, 2010",19,3233000
+judges,"June 30, 2011",20,86529000
+judges,"June 30, 2012",20,6842000
+judges,"June 30, 2013",20,112010000
+judges,"June 30, 2014",20,25735000
+judges,"June 30, 2014",20,-56908000
+judges,"June 30, 2015",20,5714000
+judges,"June 30, 2016",20,7630000
+judges,"June 30, 2016",20,37338000
+judges,"June 30, 2017",20,14789000
+judges,"June 30, 2017",20,-2714000
+judges,"June 30, 2018",20,15590000
+judges,"June 30, 2018",20,38086000
+judges,"June 30, 2019",20,-47179000
+judges,"June 30, 2019",n/a,-22709000
+judges,"June 30, 2019",20,32850000
+judges,"June 30, 2020",20,26806000
+judges,"June 30, 2020",20,-9834000
+judges,"June 30, 2021",20,31326000
+judges,"June 30, 2021",20,209000
+judges,"June 30, 2022",21,14897000
+judges,"June 30, 2022",21,-24625000
+admin,"June 30, 1999",8,-241000
+admin,"June 30, 2000",9,40000
+admin,"June 30, 2004",13,9664000
+admin,"June 30, 2009",18,1323000
+admin,"June 30, 2009",18,19883000
+admin,"June 30, 2009",18,-22065000
+admin,"June 30, 2009",18,0
+admin,"June 30, 2010",19,1205000
+admin,"June 30, 2010",19,-550000
+admin,"June 30, 2011",20,2927000
+admin,"June 30, 2012",20,612000
+admin,"June 30, 2013",20,2948000
+admin,"June 30, 2014",20,-6120000
+admin,"June 30, 2014",20,6934000
+admin,"June 30, 2015",20,-6118000
+admin,"June 30, 2016",20,515000
+admin,"June 30, 2016",20,2050000
+admin,"June 30, 2017",20,999000
+admin,"June 30, 2017",20,2516000
+admin,"June 30, 2018",20,1018000
+admin,"June 30, 2018",20,697000
+admin,"June 30, 2019",20,-2889000
+admin,"June 30, 2019",n/a,-1828000
+admin,"June 30, 2019",20,2148000
+admin,"June 30, 2020",20,1647000
+admin,"June 30, 2020",20,1053000
+admin,"June 30, 2021",20,1717000
+admin,"June 30, 2021",20,-4089000
+admin,"June 30, 2022",21,836000
+admin,"June 30, 2022",21,-666000
+senior management,"June 30, 1999",8,-1998000
+senior management,"June 30, 2004",13,198538000
+senior management,"June 30, 2009",18,65011000
+senior management,"June 30, 2009",18,1266182000
+senior management,"June 30, 2009",18,-287398000
+senior management,"June 30, 2009",18,-53836000
+senior management,"June 30, 2010",19,35485000
+senior management,"June 30, 2010",19,-92968000
+senior management,"June 30, 2011",20,135341000
+senior management,"June 30, 2012",20,70063000
+senior management,"June 30, 2013",20,396327000
+senior management,"June 30, 2014",20,-156584000
+senior management,"June 30, 2014",20,63180000
+senior management,"June 30, 2015",20,54309000
+senior management,"June 30, 2016",20,32401000
+senior management,"June 30, 2016",20,101723000
+senior management,"June 30, 2017",20,61150000
+senior management,"June 30, 2017",20,82935000
+senior management,"June 30, 2018",20,63205000
+senior management,"June 30, 2018",20,81727000
+senior management,"June 30, 2019",20,23274000
+senior management,"June 30, 2019",n/a,-68418000
+senior management,"June 30, 2019",20,130231000
+senior management,"June 30, 2020",20,112644000
+senior management,"June 30, 2020",20,140394000
+senior management,"June 30, 2021",20,134725000
+senior management,"June 30, 2021",20,-75675000
+senior management,"June 30, 2022",21,66829000
+senior management,"June 30, 2022",21,69585000
+drop,"June 30, 2004",13,-62935000
+drop,"June 30, 2009",18,633656000
+drop,"June 30, 2009",18,-22471431000
+drop,"June 30, 2009",18,23854773000
+drop,"June 30, 2010",19,263857000
+drop,"June 30, 2011",20,951887000
+drop,"June 30, 2012",20,-124977000
+drop,"June 30, 2013",20,5292000
+drop,"June 30, 2014",20,265977000
+drop,"June 30, 2014",20,-670106000
+drop,"June 30, 2015",20,-209631000
+drop,"June 30, 2016",20,84260000
+drop,"June 30, 2016",20,-441179000
+drop,"June 30, 2017",20,178514000
+drop,"June 30, 2017",20,208063000
+drop,"June 30, 2018",20,187159000
+drop,"June 30, 2018",20,9668000
+drop,"June 30, 2019",20,201089000
+drop,"June 30, 2019",20,-125046000
+drop,"June 30, 2020",20,390605000
+drop,"June 30, 2020",20,131779000
+drop,"June 30, 2021",20,400591000
+drop,"June 30, 2021",20,-639550000
+drop,"June 30, 2022",21,186528000
+drop,"June 30, 2022",21,-5108000

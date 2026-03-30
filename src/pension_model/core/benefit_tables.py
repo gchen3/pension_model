@@ -519,6 +519,99 @@ def build_ann_factor_table(
     return df
 
 
+def build_ann_factor_table_compact(
+    salary_benefit_table: pd.DataFrame,
+    compact_mortality,
+    class_name: str,
+    constants: ModelConstants,
+) -> pd.DataFrame:
+    """
+    Build annuity factor table using CompactMortality (no 3M-row CSV needed).
+
+    For each (entry_year, entry_age, yos) from the salary_benefit_table,
+    generates mortality/COLA/discount vectors and computes annuity factors.
+
+    Same output as build_ann_factor_table but without materializing the
+    full mortality cross-product table.
+    """
+    from pension_model.core.tier_logic import get_tier as _get_tier
+
+    ben = constants.benefit
+    econ = constants.economic
+    r = constants.ranges
+
+    # Get unique cohorts from salary_benefit_table
+    sbt = salary_benefit_table[["entry_year", "entry_age", "yos"]].drop_duplicates()
+
+    rows = []
+    for _, cohort in sbt.iterrows():
+        ey = int(cohort["entry_year"])
+        ea = int(cohort["entry_age"])
+        yos = int(cohort["yos"])
+        term_age = ea + yos
+        term_year = ey + yos
+
+        if term_age > r.max_age:
+            continue
+
+        # Generate dist_age range
+        for dist_age in range(term_age, r.max_age + 1):
+            dist_year = ey + dist_age - ea
+
+            # Determine tier and mortality status
+            tier = _get_tier(class_name, ey, dist_age, yos, r.new_year)
+            is_retiree = "norm" in tier or "early" in tier
+            mort = compact_mortality.get_rate(dist_age, dist_year, is_retiree)
+
+            # Discount rate and COLA from tier
+            dr = econ.dr_new if "tier_3" in tier else econ.dr_current
+
+            is_tier1 = "tier_1" in tier
+            is_tier2 = "tier_2" in tier
+            if is_tier1:
+                if ben.cola_tier_1_active_constant:
+                    cola = ben.cola_tier_1_active
+                else:
+                    yos_b4 = min(max(2011 - ey, 0), yos)
+                    cola = ben.cola_tier_1_active * yos_b4 / yos if yos > 0 else 0
+            elif is_tier2:
+                cola = ben.cola_tier_2_active
+            else:
+                cola = ben.cola_tier_3_active
+
+            rows.append((ey, ea, dist_year, dist_age, yos, term_year, mort, tier, dr, cola))
+
+    df = pd.DataFrame(rows, columns=[
+        "entry_year", "entry_age", "dist_year", "dist_age", "yos",
+        "term_year", "mort_final", "tier_at_dist_age", "dr", "cola",
+    ])
+
+    # Vectorized cumulative products (same as build_ann_factor_table)
+    group_cols = ["entry_year", "entry_age", "yos"]
+    df = df.sort_values(group_cols + ["dist_age"]).reset_index(drop=True)
+
+    g = df.groupby(group_cols)
+    dr_lagged = g["dr"].shift(1, fill_value=0.0)
+    mort_lagged = g["mort_final"].shift(1, fill_value=0.0)
+    cola_lagged = g["cola"].shift(1, fill_value=0.0)
+
+    df["cum_dr"] = (1 + dr_lagged).groupby([df[c] for c in group_cols]).cumprod()
+    df["cum_mort"] = (1 - mort_lagged).groupby([df[c] for c in group_cols]).cumprod()
+    df["cum_cola"] = (1 + cola_lagged).groupby([df[c] for c in group_cols]).cumprod()
+
+    df["cum_mort_dr"] = df["cum_mort"] / df["cum_dr"]
+    df["cum_mort_dr_cola"] = df["cum_mort_dr"] * df["cum_cola"]
+
+    grp = df.groupby(group_cols)["cum_mort_dr_cola"]
+    group_total = grp.transform("sum")
+    cum_forward = grp.cumsum()
+    rev_cumsum = group_total - cum_forward + df["cum_mort_dr_cola"]
+    df["ann_factor"] = rev_cumsum / df["cum_mort_dr_cola"]
+
+    df["class_name"] = class_name
+    return df
+
+
 # ---------------------------------------------------------------------------
 # 4. Benefit table (db_benefit, pvfb_db_at_term_age)
 # ---------------------------------------------------------------------------
