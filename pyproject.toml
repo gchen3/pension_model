@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "Don Boyd", email = "donboyd5@gmail.com"}
 ]
 keywords = ["pension", "actuarial", "financial-modeling"]
 classifiers = [
@@ -29,7 +29,7 @@ dependencies = [
     "numpy>=1.24.0",
     "pydantic>=2.0.0",
     "openpyxl>=3.1.0",
-    "pydantic-settings>=2.0.0",
+    "pytest>=7.4.0",
 ]
 
 [project.optional-dependencies]
@@ -43,9 +43,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/pension-model"
-Documentation = "https://github.com/yourusername/pension-model/docs"
-Repository = "https://github.com/yourusername/pension-model"
+Homepage = "https://github.com/donboyd5/pension_model"
+Repository = "https://github.com/donboyd5/pension_model"
 
 [tool.setuptools.packages.find]
 where = ["src"]
