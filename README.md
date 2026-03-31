@@ -29,8 +29,10 @@ You must activate the virtual environment each time you open a new terminal. You
 
 ## Running the model
 
+From the project directory:
+
 ```bash
-python scripts/run_model.py                # run the model and validate against baseline
-python scripts/run_model.py --no-test      # model + validation only, skip unit tests
-python scripts/run_model.py --test-only    # unit tests only
+pension-model frs                # run the FRS model and validate against baseline
+pension-model frs --no-test      # model + validation only, skip unit tests
+pension-model frs --test-only    # unit tests only
 ```
