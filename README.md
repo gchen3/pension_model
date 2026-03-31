@@ -36,3 +36,14 @@ pension-model frs                # run the FRS model + baseline validation tests
 pension-model frs --no-test      # run model only, skip tests
 pension-model frs --test-only    # run tests only
 ```
+
+## Calibration
+
+Calibration computes adjustment factors so the model's baseline output matches the actuarial valuation report. Run it after changing benefit formulas, data, or decrement tables — not after changing policy assumptions.
+
+```bash
+pension-model calibrate            # compute calibration and print diagnostics
+pension-model calibrate --write    # also write factors to configs/frs/calibration.json
+```
+
+See [docs/calibration.md](docs/calibration.md) for details and [docs/developer.md](docs/developer.md) for the full developer guide.

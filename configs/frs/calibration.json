@@ -1,0 +1,38 @@
+{
+  "description": "Calibration factors for FRS pension model",
+  "source": "Computed to match FRS July 1, 2022 actuarial valuation report",
+  "notes": "cal_factor=0.9 was set by R modelers (Reason Foundation) as a rounded first approximation to match normal cost. nc_cal provides per-class fine-tuning. pvfb_term_current captures AAL gap.",
+
+  "cal_factor": 0.9,
+
+  "classes": {
+    "regular": {
+      "nc_cal": 0.984963477202493,
+      "pvfb_term_current": 6591924964
+    },
+    "special": {
+      "nc_cal": 0.984809087444491,
+      "pvfb_term_current": 3237763994
+    },
+    "admin": {
+      "nc_cal": 1.39609079246981,
+      "pvfb_term_current": -2095291
+    },
+    "eco": {
+      "nc_cal": 0.828322007207855,
+      "pvfb_term_current": 27604397
+    },
+    "eso": {
+      "nc_cal": 0.93956050660486,
+      "pvfb_term_current": 30965398
+    },
+    "judges": {
+      "nc_cal": 0.916933181009937,
+      "pvfb_term_current": 101107976
+    },
+    "senior_management": {
+      "nc_cal": 0.961468401287872,
+      "pvfb_term_current": 635471640
+    }
+  }
+}

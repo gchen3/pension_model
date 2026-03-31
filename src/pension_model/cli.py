@@ -137,6 +137,59 @@ def run_tests():
     return result.returncode == 0
 
 
+def cmd_calibrate(args):
+    """Run calibration: compute nc_cal and pvfb_term_current from AV targets."""
+    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.model_constants import frs_constants, neutral_calibration
+    from pension_model.core.funding_model import load_funding_inputs
+    from pension_model.core.calibration import (
+        load_targets_from_init_funding, run_calibration, format_diagnostics,
+        write_calibration_json,
+    )
+
+    print("=" * 60)
+    print("FRS Calibration")
+    print("=" * 60)
+
+    t0 = time.time()
+
+    # Load constants with neutral calibration (nc_cal=1.0, pvfb_term_current=0)
+    constants = neutral_calibration(frs_constants())
+    cal_factor = constants.benefit.cal_factor
+
+    # Build calibration targets from init_funding_data + known AV NC rates
+    funding_inputs = load_funding_inputs(BASELINE)
+    val_norm_costs = {cn: constants.class_data[cn].val_norm_cost for cn in CLASSES}
+    targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)
+
+    # Run pipeline with neutral calibration
+    n = len(CLASSES)
+    liability = {}
+    print("  Running uncalibrated pipeline...")
+    for i, cn in enumerate(CLASSES):
+        pct = int(i / n * 100)
+        sys.stdout.write(f"\r    {pct:3d}%")
+        sys.stdout.flush()
+        liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants)
+    sys.stdout.write(f"\r    100% done\n")
+    sys.stdout.flush()
+
+    # Compute calibration
+    results = run_calibration(liability, targets, constants.ranges.start_year)
+
+    elapsed = time.time() - t0
+    print(f"  Calibration complete: {elapsed:.0f}s\n")
+
+    # Print diagnostics
+    print(format_diagnostics(results, targets, cal_factor))
+
+    # Write calibration JSON if requested
+    if args.write:
+        output_path = Path(args.output) if args.output else Path("configs/frs/calibration.json")
+        write_calibration_json(cal_factor, results, output_path)
+        print(f"\n  Calibration written to {output_path}")
+
+
 def cmd_frs(args):
     """Run the Florida FRS pension model."""
     if args.test_only:
@@ -172,6 +225,11 @@ def main():
     frs.add_argument("--no-test", action="store_true", help="Skip tests")
     frs.add_argument("--test-only", action="store_true", help="Run tests only")
 
+    cal = subparsers.add_parser("calibrate", help="Compute calibration factors")
+    cal.add_argument("plan_name", nargs="?", default="frs", help="Plan to calibrate (default: frs)")
+    cal.add_argument("--write", action="store_true", help="Write calibration to JSON")
+    cal.add_argument("--output", type=str, default=None, help="Output path for calibration JSON")
+
     args = parser.parse_args()
 
     if args.plan is None:
@@ -180,3 +238,5 @@ def main():
 
     if args.plan == "frs":
         cmd_frs(args)
+    elif args.plan == "calibrate":
+        cmd_calibrate(args)

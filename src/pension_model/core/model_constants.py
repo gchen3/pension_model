@@ -7,8 +7,10 @@ and model assumptions. For generalization, a different plan would provide
 different values through the same interface.
 """
 
-from dataclasses import dataclass, field
-from typing import Dict
+import json
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -92,10 +94,11 @@ class ClassACFRData:
     outflow: float                     # Benefit payments + other disbursements
     retiree_pop: float                 # Number of current annuitants
     total_active_member: float         # Total active members (DB + DC)
-    pvfb_term_current: float           # Remaining accrued liability adjustment
     er_dc_cont_rate: float             # Employer DC contribution rate
     val_norm_cost: float               # Normal cost from valuation report
-    nc_cal: float                      # NC calibration factor (val_norm_cost / model_norm_cost)
+    # Calibration fields — defaults allow uncalibrated operation
+    nc_cal: float = 1.0               # NC calibration factor (val_norm_cost / model_norm_cost)
+    pvfb_term_current: float = 0.0    # Remaining accrued liability adjustment
 
 
 @dataclass(frozen=True)
@@ -138,51 +141,111 @@ class ModelConstants:
                                   disbursement_to_ip + admin_expense)
 
 
-def frs_constants() -> ModelConstants:
-    """Create ModelConstants with Florida FRS baseline values."""
-    class_data = {
+def load_calibration(calibration_path: Path) -> dict:
+    """Load calibration factors from a JSON file.
+
+    Returns dict with 'cal_factor' and per-class 'nc_cal' and 'pvfb_term_current'.
+    """
+    with open(calibration_path) as f:
+        return json.load(f)
+
+
+def apply_calibration(constants: ModelConstants, calibration: dict) -> ModelConstants:
+    """Return a new ModelConstants with calibration factors applied.
+
+    calibration should have 'cal_factor' and 'classes' dict with per-class
+    'nc_cal' and 'pvfb_term_current'.
+    """
+    cal_factor = calibration.get("cal_factor", constants.benefit.cal_factor)
+    new_benefit = replace(constants.benefit, cal_factor=cal_factor)
+
+    new_class_data = {}
+    cal_classes = calibration.get("classes", {})
+    for cn, cd in constants.class_data.items():
+        if cn in cal_classes:
+            cc = cal_classes[cn]
+            new_class_data[cn] = replace(
+                cd,
+                nc_cal=cc.get("nc_cal", cd.nc_cal),
+                pvfb_term_current=cc.get("pvfb_term_current", cd.pvfb_term_current),
+            )
+        else:
+            new_class_data[cn] = cd
+
+    return replace(constants, benefit=new_benefit, class_data=new_class_data)
+
+
+def neutral_calibration(constants: ModelConstants) -> ModelConstants:
+    """Return a copy with nc_cal=1.0, pvfb_term_current=0 for all classes.
+
+    cal_factor is left unchanged (it is a modeling choice, not a computed calibration).
+    """
+    new_class_data = {
+        cn: replace(cd, nc_cal=1.0, pvfb_term_current=0.0)
+        for cn, cd in constants.class_data.items()
+    }
+    return replace(constants, class_data=new_class_data)
+
+
+def _frs_class_data() -> Dict[str, ClassACFRData]:
+    """FRS ACFR data without calibration (nc_cal=1.0, pvfb_term_current=0)."""
+    return {
         "regular": ClassACFRData(
             outflow=8_967_096_000, retiree_pop=393_308,
-            total_active_member=537_128, pvfb_term_current=6_591_924_964,
+            total_active_member=537_128,
             er_dc_cont_rate=0.066, val_norm_cost=0.0896,
-            nc_cal=0.0896 / 0.09096784,
         ),
         "special": ClassACFRData(
             outflow=2_423_470_000, retiree_pop=41_696,
-            total_active_member=72_925, pvfb_term_current=3_237_763_994,
+            total_active_member=72_925,
             er_dc_cont_rate=0.1654, val_norm_cost=0.2013,
-            nc_cal=0.2013 / 0.2044051,
         ),
         "admin": ClassACFRData(
             outflow=8_090_000, retiree_pop=160,
-            total_active_member=104, pvfb_term_current=-2_095_291,
+            total_active_member=104,
             er_dc_cont_rate=0.0843, val_norm_cost=0.1457,
-            nc_cal=0.1457 / 0.10436284,
         ),
         "eco": ClassACFRData(
             outflow=9_442_000, retiree_pop=227,
-            total_active_member=2_075, pvfb_term_current=27_604_397,
+            total_active_member=2_075,
             er_dc_cont_rate=0.0994, val_norm_cost=0.1254,
-            nc_cal=0.1254 / 0.1513904,
         ),
         "eso": ClassACFRData(
             outflow=53_526_000, retiree_pop=1_446,
-            total_active_member=2_075, pvfb_term_current=30_965_398,
+            total_active_member=2_075,
             er_dc_cont_rate=0.1195, val_norm_cost=0.1463,
-            nc_cal=0.1463 / 0.1557111,
         ),
         "judges": ClassACFRData(
             outflow=105_844_000, retiree_pop=989,
-            total_active_member=2_075, pvfb_term_current=101_107_976,
+            total_active_member=2_075,
             er_dc_cont_rate=0.1405, val_norm_cost=0.1777,
-            nc_cal=0.1777 / 0.1937982,
         ),
         "senior_management": ClassACFRData(
             outflow=338_664_000, retiree_pop=5_828,
-            total_active_member=7_610, pvfb_term_current=635_471_640,
+            total_active_member=7_610,
             er_dc_cont_rate=0.0798, val_norm_cost=0.1086,
-            nc_cal=0.1086 / 0.11295223,
         ),
     }
 
-    return ModelConstants(class_data=class_data)
+
+def frs_constants(calibration_path: Optional[Path] = None) -> ModelConstants:
+    """Create ModelConstants with Florida FRS baseline values.
+
+    If calibration_path is provided, loads calibration from JSON.
+    Otherwise uses default calibration from configs/frs/calibration.json.
+    """
+    class_data = _frs_class_data()
+    constants = ModelConstants(class_data=class_data)
+
+    # Load calibration
+    if calibration_path is None:
+        # Default: look for calibration.json relative to project root
+        default_path = Path(__file__).parents[3] / "configs" / "frs" / "calibration.json"
+        if default_path.exists():
+            calibration_path = default_path
+
+    if calibration_path is not None:
+        calibration = load_calibration(calibration_path)
+        constants = apply_calibration(constants, calibration)
+
+    return constants
