@@ -1,0 +1,204 @@
+{
+  "plan_name": "txtrs",
+  "plan_description": "Texas Teacher Retirement System",
+
+  "economic": {
+    "dr_current": 0.07,
+    "dr_new": 0.07,
+    "dr_old": 0.07,
+    "payroll_growth": 0.029,
+    "pop_growth": 0.0,
+    "inflation": 0.023,
+    "model_return": 0.07
+  },
+
+  "benefit": {
+    "db_ee_cont_rate": 0.0825,
+    "db_ee_interest_rate": 0.02,
+    "cal_factor": 0.993,
+    "retire_refund_ratio": 0.3,
+    "fas_years_default": 5,
+    "fas_years_grandfathered": 3,
+    "min_benefit_monthly": 150,
+    "benefit_types": ["db", "cb", "dc"],
+    "cola": {
+      "tier_1_active": 0.0,
+      "tier_2_active": 0.0,
+      "tier_3_active": 0.0,
+      "current_retire": 0.0,
+      "current_retire_one_time": 0.0,
+      "one_time_cola": false
+    },
+    "cash_balance": {
+      "ee_pay_credit": 0.06,
+      "er_pay_credit": 0.09,
+      "vesting_yos": 5,
+      "icr_smooth_period": 5,
+      "icr_floor": 0.04,
+      "icr_cap": 0.07,
+      "icr_upside_share": 0.5,
+      "annuity_conversion_rate": 0.04,
+      "return_volatility": 0.12
+    },
+    "dc": {
+      "ee_cont_rate": 0.0225,
+      "assumed_return": 0.07,
+      "return_volatility": 0.12
+    }
+  },
+
+  "funding": {
+    "policy": "statutory",
+    "amo_method": "level_pct",
+    "amo_period_new": 30,
+    "amo_pay_growth": 0.029,
+    "funding_lag": 1,
+    "ava_smoothing": {
+      "method": "gain_loss",
+      "recognition_period": 4
+    }
+  },
+
+  "ranges": {
+    "min_age": 20,
+    "max_age": 120,
+    "start_year": 2024,
+    "new_year": 2024,
+    "min_entry_year": 1980,
+    "model_period": 30,
+    "max_yos": 70
+  },
+
+  "classes": ["all"],
+
+  "class_groups": {
+    "default": ["all"]
+  },
+
+  "sep_class_map": {
+    "all": "all"
+  },
+
+  "tiers": [
+    {
+      "name": "grandfathered",
+      "assignment": "grandfathered_rule",
+      "grandfathered_params": {
+        "cutoff_year": 2005,
+        "conditions": [
+          {"min_age_at_cutoff": 50},
+          {"rule_of_at_cutoff": 70},
+          {"min_yos_at_cutoff": 25}
+        ]
+      },
+      "fas_years": 3,
+      "eligibility": {
+        "default": {
+          "normal": [
+            {"min_age": 65, "min_yos": 5},
+            {"rule_of": 80, "min_yos": 5}
+          ],
+          "early": [
+            {"min_age": 55, "min_yos": 5},
+            {"min_yos": 30}
+          ],
+          "vesting_yos": 5
+        }
+      },
+      "early_retire_reduction": {
+        "rules": [
+          {"condition": {"min_yos": 30}, "formula": "linear", "rate_per_year": 0.02, "nra": 50},
+          {"condition": {"min_yos": 20, "grandfathered": true}, "formula": "table", "table_key": "reduced_gft"},
+          {"condition": {}, "formula": "table", "table_key": "reduced_others"}
+        ]
+      },
+      "cola_key": "tier_1_active"
+    },
+    {
+      "name": "intermediate",
+      "entry_year_min": 2006,
+      "entry_year_max": 2010,
+      "not_grandfathered": true,
+      "fas_years": 5,
+      "eligibility": {
+        "default": {
+          "normal": [
+            {"min_age": 65, "min_yos": 5},
+            {"rule_of": 80, "min_age": 60, "min_yos": 5}
+          ],
+          "early": [
+            {"min_age": 55, "min_yos": 5},
+            {"min_yos": 30},
+            {"rule_of": 80, "min_yos": 5}
+          ],
+          "vesting_yos": 5
+        }
+      },
+      "early_retire_reduction": {
+        "rules": [
+          {"condition": {"or": [{"rule_of": 80}, {"min_yos": 30}]}, "formula": "linear", "rate_per_year": 0.05, "nra": 60},
+          {"condition": {}, "formula": "table", "table_key": "reduced_others"}
+        ]
+      },
+      "cola_key": "tier_2_active"
+    },
+    {
+      "name": "current",
+      "entry_year_min": 2010,
+      "entry_year_max": null,
+      "not_grandfathered": true,
+      "fas_years": 5,
+      "eligibility": {
+        "default": {
+          "normal": [
+            {"min_age": 65, "min_yos": 5},
+            {"rule_of": 80, "min_age": 62, "min_yos": 5}
+          ],
+          "early": [
+            {"min_age": 55, "min_yos": 5},
+            {"min_yos": 30},
+            {"rule_of": 80, "min_yos": 5}
+          ],
+          "vesting_yos": 5
+        }
+      },
+      "early_retire_reduction": {
+        "rules": [
+          {"condition": {"or": [{"rule_of": 80}, {"min_yos": 30}]}, "formula": "linear", "rate_per_year": 0.05, "nra": 62},
+          {"condition": {}, "formula": "table", "table_key": "reduced_others"}
+        ]
+      },
+      "cola_key": "tier_3_active"
+    }
+  ],
+
+  "benefit_multipliers": {
+    "all": {
+      "all_tiers": {"flat": 0.023}
+    }
+  },
+
+  "plan_design": {
+    "default": {
+      "before_new_year": 1.0,
+      "new_db": 1.0,
+      "new_cb": 0.0
+    }
+  },
+
+  "acfr_data": {
+    "all": {
+      "outflow": 15258000000,
+      "retiree_pop": 508701,
+      "total_active_member": 990000,
+      "er_dc_cont_rate": 0.0,
+      "val_norm_cost": 0.121
+    }
+  },
+
+  "mortality": {
+    "base_table": "pub_2010_teacher",
+    "improvement_scale": "mp_2021",
+    "scale_multiple": 0.9
+  }
+}

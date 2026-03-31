@@ -1,0 +1,297 @@
+{
+  "plan_name": "frs",
+  "plan_description": "Florida Retirement System",
+
+  "economic": {
+    "dr_current": 0.067,
+    "dr_new": 0.067,
+    "dr_old": 0.068,
+    "payroll_growth": 0.0325,
+    "pop_growth": 0.0,
+    "inflation": 0.024,
+    "model_return": 0.067
+  },
+
+  "benefit": {
+    "db_ee_cont_rate": 0.03,
+    "db_ee_interest_rate": 0.0,
+    "cal_factor": 0.9,
+    "retire_refund_ratio": 1.0,
+    "fas_years_default": 5,
+    "benefit_types": ["db", "dc"],
+    "cola": {
+      "tier_1_active": 0.03,
+      "tier_1_active_constant": false,
+      "tier_2_active": 0.0,
+      "tier_3_active": 0.0,
+      "current_retire": 0.03,
+      "current_retire_one_time": 0.0,
+      "one_time_cola": false
+    }
+  },
+
+  "funding": {
+    "policy": "statutory",
+    "amo_method": "level_pct",
+    "amo_period_new": 20,
+    "amo_pay_growth": 0.0325,
+    "funding_lag": 1,
+    "amo_period_term": 50,
+    "amo_term_growth": 0.03,
+    "ava_smoothing": {
+      "method": "corridor",
+      "corridor_low": 0.80,
+      "corridor_high": 1.20,
+      "gain_loss_recognition": 0.20
+    }
+  },
+
+  "ranges": {
+    "min_age": 18,
+    "max_age": 120,
+    "start_year": 2022,
+    "new_year": 2024,
+    "min_entry_year": 1970,
+    "model_period": 30,
+    "max_yos": 70
+  },
+
+  "classes": ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"],
+
+  "class_groups": {
+    "regular_group": ["regular", "eco", "eso", "judges", "senior_management"],
+    "special_group": ["special", "admin"]
+  },
+
+  "sep_class_map": {
+    "regular": "regular",
+    "special": "special",
+    "admin": "admin",
+    "eco": "eco",
+    "eso": "regular",
+    "judges": "judges",
+    "senior_management": "senior_management"
+  },
+
+  "tiers": [
+    {
+      "name": "tier_1",
+      "entry_year_min": null,
+      "entry_year_max": 2011,
+      "eligibility": {
+        "regular_group": {
+          "normal": [
+            {"min_yos": 30},
+            {"min_age": 62, "min_yos": 6}
+          ],
+          "early": [
+            {"min_age": 58, "min_yos": 6}
+          ],
+          "vesting_yos": 6
+        },
+        "special_group": {
+          "normal": [
+            {"min_yos": 25},
+            {"min_age": 55, "min_yos": 6},
+            {"min_age": 52, "min_yos": 25}
+          ],
+          "early": [
+            {"min_age": 53, "min_yos": 6}
+          ],
+          "vesting_yos": 6
+        }
+      },
+      "early_retire_reduction": {
+        "rate_per_year": 0.05,
+        "nra": {
+          "special": 55,
+          "default": 62
+        }
+      },
+      "cola_key": "tier_1_active"
+    },
+    {
+      "name": "tier_2",
+      "entry_year_min": 2011,
+      "entry_year_max_param": "new_year",
+      "eligibility": {
+        "regular_group": {
+          "normal": [
+            {"min_yos": 33},
+            {"min_age": 65, "min_yos": 8}
+          ],
+          "early": [
+            {"min_age": 61, "min_yos": 8}
+          ],
+          "vesting_yos": 8
+        },
+        "special_group": {
+          "normal": [
+            {"min_yos": 30},
+            {"min_age": 60, "min_yos": 8}
+          ],
+          "early": [
+            {"min_age": 56, "min_yos": 8}
+          ],
+          "vesting_yos": 8
+        }
+      },
+      "early_retire_reduction": {
+        "rate_per_year": 0.05,
+        "nra": {
+          "special": 60,
+          "default": 65
+        }
+      },
+      "cola_key": "tier_2_active"
+    },
+    {
+      "name": "tier_3",
+      "entry_year_min_param": "new_year",
+      "entry_year_max": null,
+      "eligibility_same_as": "tier_2",
+      "early_retire_reduction_same_as": "tier_2",
+      "cola_key": "tier_3_active"
+    }
+  ],
+
+  "benefit_multipliers": {
+    "regular": {
+      "tier_1": {
+        "graded": [
+          {"or": [{"min_age": 65, "min_yos": 6}, {"min_yos": 33}], "mult": 0.0168},
+          {"or": [{"min_age": 64, "min_yos": 6}, {"min_yos": 32}], "mult": 0.0165},
+          {"or": [{"min_age": 63, "min_yos": 6}, {"min_yos": 31}], "mult": 0.0163},
+          {"or": [{"min_age": 62, "min_yos": 6}, {"min_yos": 30}], "mult": 0.0160}
+        ],
+        "early_fallback": 0.0160
+      },
+      "tier_2": {
+        "graded": [
+          {"or": [{"min_age": 68, "min_yos": 8}, {"min_yos": 36}], "mult": 0.0168},
+          {"or": [{"min_age": 67, "min_yos": 8}, {"min_yos": 35}], "mult": 0.0165},
+          {"or": [{"min_age": 66, "min_yos": 8}, {"min_yos": 34}], "mult": 0.0163},
+          {"or": [{"min_age": 65, "min_yos": 8}, {"min_yos": 33}], "mult": 0.0160}
+        ],
+        "early_fallback": 0.0160
+      },
+      "tier_3_same_as": "tier_2"
+    },
+    "admin": {
+      "tier_1": {
+        "graded": [
+          {"or": [{"min_age": 58, "min_yos": 6}, {"min_yos": 28}], "mult": 0.0168},
+          {"or": [{"min_age": 57, "min_yos": 6}, {"min_yos": 27}], "mult": 0.0165},
+          {"or": [{"min_age": 56, "min_yos": 6}, {"min_yos": 26}], "mult": 0.0163},
+          {"or": [{"min_age": 55, "min_yos": 6}, {"min_yos": 25}], "mult": 0.0160}
+        ],
+        "early_fallback": 0.0160
+      },
+      "tier_2": {
+        "graded": [
+          {"or": [{"min_age": 63, "min_yos": 8}, {"min_yos": 33}], "mult": 0.0168},
+          {"or": [{"min_age": 62, "min_yos": 8}, {"min_yos": 32}], "mult": 0.0165},
+          {"or": [{"min_age": 61, "min_yos": 8}, {"min_yos": 31}], "mult": 0.0163},
+          {"or": [{"min_age": 60, "min_yos": 8}, {"min_yos": 30}], "mult": 0.0160}
+        ],
+        "early_fallback": 0.0160
+      },
+      "tier_3": {
+        "graded": [
+          {"or": [{"min_age": 63, "min_yos": 8}], "mult": 0.0168},
+          {"or": [{"min_age": 62, "min_yos": 8}], "mult": 0.0165},
+          {"or": [{"min_age": 61, "min_yos": 8}], "mult": 0.0163},
+          {"or": [{"min_age": 60, "min_yos": 8}], "mult": 0.0160}
+        ],
+        "early_fallback": 0.0160
+      }
+    },
+    "special": {
+      "all_tiers": {"flat": 0.03, "flat_before_year": {"year": 1974, "mult": 0.02}}
+    },
+    "eco": {
+      "all_tiers": {"flat": 0.03}
+    },
+    "eso": {
+      "all_tiers": {"flat": 0.03}
+    },
+    "judges": {
+      "all_tiers": {"flat": 0.0333}
+    },
+    "senior_management": {
+      "all_tiers": {"flat": 0.02}
+    }
+  },
+
+  "plan_design": {
+    "special_group": {
+      "before_2018": 0.95,
+      "after_2018": 0.85,
+      "new": 0.75
+    },
+    "regular_group": {
+      "before_2018": 0.75,
+      "after_2018": 0.25,
+      "new": 0.25
+    }
+  },
+
+  "acfr_data": {
+    "regular": {
+      "outflow": 8967096000,
+      "retiree_pop": 393308,
+      "total_active_member": 537128,
+      "er_dc_cont_rate": 0.066,
+      "val_norm_cost": 0.0896
+    },
+    "special": {
+      "outflow": 2423470000,
+      "retiree_pop": 41696,
+      "total_active_member": 72925,
+      "er_dc_cont_rate": 0.1654,
+      "val_norm_cost": 0.2013
+    },
+    "admin": {
+      "outflow": 8090000,
+      "retiree_pop": 160,
+      "total_active_member": 104,
+      "er_dc_cont_rate": 0.0843,
+      "val_norm_cost": 0.1457
+    },
+    "eco": {
+      "outflow": 9442000,
+      "retiree_pop": 227,
+      "total_active_member": 2075,
+      "er_dc_cont_rate": 0.0994,
+      "val_norm_cost": 0.1254
+    },
+    "eso": {
+      "outflow": 53526000,
+      "retiree_pop": 1446,
+      "total_active_member": 2075,
+      "er_dc_cont_rate": 0.1195,
+      "val_norm_cost": 0.1463
+    },
+    "judges": {
+      "outflow": 105844000,
+      "retiree_pop": 989,
+      "total_active_member": 2075,
+      "er_dc_cont_rate": 0.1405,
+      "val_norm_cost": 0.1777
+    },
+    "senior_management": {
+      "outflow": 338664000,
+      "retiree_pop": 5828,
+      "total_active_member": 7610,
+      "er_dc_cont_rate": 0.0798,
+      "val_norm_cost": 0.1086
+    }
+  },
+
+  "ben_payment_ratio_components": {
+    "pension_payment": 11944986866,
+    "contribution_refunds": 28343757,
+    "disbursement_to_ip": 768106850,
+    "admin_expense": 22494571
+  }
+}

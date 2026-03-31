@@ -18,8 +18,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pension_model.core.model_constants import ModelConstants, frs_constants
 from pension_model.core.tier_logic import get_tier, get_ben_mult, get_reduce_factor, get_sep_type
+from pension_model.plan_config import (
+    PlanConfig, load_frs_config,
+    get_tier as pc_get_tier,
+    get_ben_mult as pc_get_ben_mult,
+    get_reduce_factor as pc_get_reduce_factor,
+    get_sep_type as pc_get_sep_type,
+)
 from pension_model.core.benefit_tables import (
     build_salary_headcount_table,
     build_entrant_profile,
@@ -68,7 +74,7 @@ def load_raw_inputs(class_name: str, baseline_dir: Path) -> dict:
 
 
 def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
-                             constants: ModelConstants, baseline_dir: Path) -> float:
+                             constants, baseline_dir: Path) -> float:
     """Compute headcount adjustment ratio matching R model."""
     if class_name in ("eco", "eso", "judges"):
         combined_raw = sum(
@@ -79,16 +85,39 @@ def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
     return constants.class_data[class_name].total_active_member / headcount.iloc[:, 1:].sum().sum()
 
 
-def build_benefit_tables(class_name: str, inputs: dict, constants: ModelConstants,
+def _make_callables(constants, class_name=None):
+    """Create tier/benefit callables from constants.
+
+    When constants is a PlanConfig, returns config-driven callables.
+    When it's a ModelConstants, returns the original tier_logic callables.
+    """
+    if isinstance(constants, PlanConfig):
+        cfg = constants
+        return (
+            lambda cn, ey, age, yos, **kw: pc_get_tier(cfg, cn, ey, age, yos),
+            lambda cn, tier, da, yos, dy=0: pc_get_ben_mult(cfg, cn, tier, da, yos, dy),
+            lambda cn, tier, da: pc_get_reduce_factor(cfg, cn, tier, da),
+            pc_get_sep_type,
+        )
+    return get_tier, get_ben_mult, get_reduce_factor, get_sep_type
+
+
+def build_benefit_tables(class_name: str, inputs: dict, constants,
                          baseline_dir: Path) -> dict:
     """
     Build all benefit tables from raw inputs for a single class.
 
+    Args:
+        constants: PlanConfig or ModelConstants.
+
     Returns dict with: salary_headcount, entrant_profile, salary_benefit,
         separation_rate, ann_factor, benefit, final_benefit, benefit_val
     """
+    tier_fn, ben_mult_fn, reduce_fn, sep_type_fn = _make_callables(constants)
+
     adj_ratio = compute_adjustment_ratio(class_name, inputs["headcount"], constants, baseline_dir)
-    sep_class = SEP_CLASS_MAP[class_name]
+    sep_class = SEP_CLASS_MAP.get(class_name, constants.get_sep_class(class_name)
+                                  if isinstance(constants, PlanConfig) else class_name)
 
     # Step 1: Salary/headcount
     sh = build_salary_headcount_table(
@@ -112,7 +141,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants: ModelConstant
 
     # Step 2: Salary/benefit table
     sbt = build_salary_benefit_table(
-        sh, ep, inputs["salary_growth"], class_name, constants, get_tier,
+        sh, ep, inputs["salary_growth"], class_name, constants, tier_fn,
     )
 
     # Step 3: Separation rate table
@@ -128,11 +157,11 @@ def build_benefit_tables(class_name: str, inputs: dict, constants: ModelConstant
         aft = build_ann_factor_table_compact(sbt, inputs["_compact_mortality"], class_name, constants)
     else:
         aft = build_ann_factor_table(inputs["mortality"], class_name, constants)
-    bt = build_benefit_table(aft, sbt, class_name, constants, get_ben_mult, get_reduce_factor)
+    bt = build_benefit_table(aft, sbt, class_name, constants, ben_mult_fn, reduce_fn)
     fbt = build_final_benefit_table(bt)
 
     # Step 5: Benefit valuation table
-    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, get_sep_type)
+    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn)
 
     return {
         "salary_headcount": sh,
@@ -147,7 +176,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants: ModelConstant
 
 
 def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
-                             class_name: str, constants: ModelConstants) -> pd.DataFrame:
+                             class_name: str, constants) -> pd.DataFrame:
     """
     Compute active member liability by year (R liability model lines 77-120).
 
@@ -231,7 +260,7 @@ def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
 
 def compute_term_liability(wf_term: pd.DataFrame, benefit_val: pd.DataFrame,
                            benefit: pd.DataFrame, class_name: str,
-                           constants: ModelConstants) -> pd.DataFrame:
+                           constants) -> pd.DataFrame:
     """Compute projected terminated vested liability by year (R lines 124-149)."""
     r = constants.ranges
     is_special = class_name == "special"
@@ -269,7 +298,7 @@ def compute_term_liability(wf_term: pd.DataFrame, benefit_val: pd.DataFrame,
 
 
 def compute_refund_liability(wf_refund: pd.DataFrame, benefit: pd.DataFrame,
-                             class_name: str, constants: ModelConstants) -> pd.DataFrame:
+                             class_name: str, constants) -> pd.DataFrame:
     """Compute refund liability by year (R lines 154-169)."""
     r = constants.ranges
     is_special = class_name == "special"
@@ -298,7 +327,7 @@ def compute_refund_liability(wf_refund: pd.DataFrame, benefit: pd.DataFrame,
 
 def compute_retire_liability(wf_retire: pd.DataFrame, benefit: pd.DataFrame,
                              ann_factor: pd.DataFrame, class_name: str,
-                             constants: ModelConstants) -> pd.DataFrame:
+                             constants) -> pd.DataFrame:
     """Compute projected retiree liability by year (R lines 174-200)."""
     r = constants.ranges
     is_special = class_name == "special"
@@ -407,7 +436,7 @@ def compute_current_retiree_liability(
     retiree_distribution: pd.DataFrame,
     retiree_pop: float,
     ben_payment_current: float,
-    constants: ModelConstants,
+    constants,
 ) -> pd.DataFrame:
     """
     Project current retiree AAL (R liability model lines 204-234).
@@ -460,7 +489,7 @@ def compute_current_retiree_liability(
 
 
 def compute_current_term_vested_liability(
-    class_name: str, constants: ModelConstants,
+    class_name: str, constants,
 ) -> pd.DataFrame:
     """
     Compute current term vested AAL (R liability model lines 238-248).
@@ -501,14 +530,14 @@ def compute_current_term_vested_liability(
 
 
 def run_class_pipeline(class_name: str, baseline_dir: Path,
-                       constants: ModelConstants = None) -> pd.DataFrame:
+                       constants=None) -> pd.DataFrame:
     """
     Run the full pipeline for a single class: raw inputs → liability output.
 
     Returns a DataFrame matching R's liability.csv structure.
     """
     if constants is None:
-        constants = frs_constants()
+        constants = load_frs_config()
 
     inputs = load_raw_inputs(class_name, baseline_dir)
 
@@ -591,7 +620,7 @@ def run_class_pipeline(class_name: str, baseline_dir: Path,
 
 
 def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
-                           constants: ModelConstants = None,
+                           constants=None,
                            on_stage=None,
                            no_new_entrants: bool = False) -> pd.DataFrame:
     """
@@ -613,13 +642,13 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     from pension_model.core.decrement_builder import (
         build_withdrawal_rate_table, build_retirement_rate_tables,
     )
-    from pension_model.core.tier_logic import get_sep_type
-
     if constants is None:
-        constants = frs_constants()
+        constants = load_frs_config()
 
-    sep_class = SEP_CLASS_MAP[class_name]
-    raw_dir = baseline_dir.parent / "R_model" / "R_model_original"
+    _, _, _, sep_type_fn = _make_callables(constants)
+    sep_class = SEP_CLASS_MAP.get(class_name, constants.get_sep_class(class_name)
+                                  if isinstance(constants, PlanConfig) else class_name)
+    raw_dir = baseline_dir.parent / "R_model" / "R_model_frs"
     frs_inputs = raw_dir / "Florida FRS inputs.xlsx"
     extracted_inputs = raw_dir / "Reports" / "extracted inputs"
 
@@ -662,7 +691,7 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     bvt = tables["benefit_val"]
     fbt = tables["final_benefit"]
     bvt_bd = bvt[["entry_year", "entry_age", "yos", "term_age", "tier_at_term_age"]].copy()
-    bvt_bd["sep_type"] = bvt_bd["tier_at_term_age"].apply(get_sep_type)
+    bvt_bd["sep_type"] = bvt_bd["tier_at_term_age"].apply(sep_type_fn)
     bvt_bd["ben_decision"] = bvt_bd["sep_type"].map(
         {"retire": "retire", "vested": "mix", "non_vested": "refund"})
     bvt_bd.loc[bvt_bd["yos"] == 0, "ben_decision"] = np.nan

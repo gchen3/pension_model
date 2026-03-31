@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from pension_model.core.model_constants import ModelConstants, frs_constants
+from pension_model.plan_config import PlanConfig, load_frs_config
 from pension_model.core.pipeline import _get_pmt
 
 
@@ -99,7 +99,7 @@ def build_amort_period_tables(
 def compute_funding(
     liability_results: dict,
     funding_inputs: dict,
-    constants: ModelConstants = None,
+    constants=None,
 ) -> dict:
     """
     Run the full funding model for all classes.
@@ -113,7 +113,7 @@ def compute_funding(
         Dict mapping class_name -> funding DataFrame (also "drop" and "frs").
     """
     if constants is None:
-        constants = frs_constants()
+        constants = load_frs_config()
 
     econ = constants.economic
     fund_params = constants.funding
