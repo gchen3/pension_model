@@ -58,7 +58,26 @@ def run_pipeline(e2e=True):
     funding_inputs = load_funding_inputs(BASELINE)
     funding = compute_funding(liability, funding_inputs, constants)
 
-    return liability, funding
+    return liability, funding, constants
+
+
+def print_parameters(constants):
+    """Print key model parameters."""
+    ec = constants.economic
+    bn = constants.benefit
+    fn = constants.funding
+    rn = constants.ranges
+
+    print(f"\n  Parameters (baseline defaults):")
+    print(f"    Discount rate:          {ec.dr_current:.1%}")
+    print(f"    Investment return:      {ec.model_return:.1%}")
+    print(f"    Payroll growth:         {ec.payroll_growth:.2%}")
+    print(f"    Inflation:              {ec.inflation:.1%}")
+    print(f"    COLA (current retire):  {bn.cola_current_retire:.0%}")
+    print(f"    Funding policy:         {fn.funding_policy}")
+    print(f"    Amortization method:    {fn.amo_method}, {fn.amo_period_new}-year period")
+    print(f"    Projection horizon:     {rn.model_period} years ({rn.start_year}-{rn.start_year + rn.model_period})")
+    print(f"    Mortality table:        Pub-2010, MP-2018 improvement scale")
 
 
 def write_output(funding):
@@ -130,10 +149,11 @@ def cmd_frs(args):
     print("=" * 60)
 
     t0 = time.time()
-    liability, funding = run_pipeline()
+    liability, funding, constants = run_pipeline()
     elapsed = time.time() - t0
     print(f"  Pipeline complete: {elapsed:.0f}s")
 
+    print_parameters(constants)
     write_output(funding)
 
     if not args.no_test:
