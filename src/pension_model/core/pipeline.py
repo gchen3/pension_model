@@ -96,10 +96,12 @@ def _make_callables(constants, class_name=None):
         return (
             lambda cn, ey, age, yos, **kw: pc_get_tier(cfg, cn, ey, age, yos),
             lambda cn, tier, da, yos, dy=0: pc_get_ben_mult(cfg, cn, tier, da, yos, dy),
-            lambda cn, tier, da: pc_get_reduce_factor(cfg, cn, tier, da),
+            lambda cn, tier, da, yos=0, ey=0: pc_get_reduce_factor(cfg, cn, tier, da, yos, ey),
             pc_get_sep_type,
         )
-    return get_tier, get_ben_mult, get_reduce_factor, get_sep_type
+    return (get_tier, get_ben_mult,
+            lambda cn, tier, da, yos=0, ey=0: get_reduce_factor(cn, tier, da),
+            get_sep_type)
 
 
 def build_benefit_tables(class_name: str, inputs: dict, constants,
@@ -149,7 +151,12 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
         inputs["salary"], inputs["headcount"], inputs["salary_growth"],
         class_name, adj_ratio, constants.ranges.start_year,
     )
-    ep = build_entrant_profile(sh)
+    # Use explicit entrant profile if provided (e.g., TRS reads from Excel sheet),
+    # otherwise derive from salary_headcount (FRS approach).
+    if "_entrant_profile" in inputs:
+        ep = inputs["_entrant_profile"]
+    else:
+        ep = build_entrant_profile(sh)
 
     # For separation rates, use the sep_class's salary/headcount if different
     if sep_class != class_name:
@@ -171,21 +178,34 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     )
 
     # Step 3: Separation rate table
-    sep = build_separation_rate_table(
-        inputs["term_rate_avg"], inputs["normal_retire_tier1"],
-        inputs["normal_retire_tier2"], inputs["early_retire_tier1"],
-        inputs["early_retire_tier2"], sep_ep, sep_class, constants,
-    )
+    if "_separation_rate" in inputs:
+        # Pre-built separation rate table (e.g., TRS with different decrement structure)
+        sep = inputs["_separation_rate"]
+    else:
+        sep = build_separation_rate_table(
+            inputs["term_rate_avg"], inputs["normal_retire_tier1"],
+            inputs["normal_retire_tier2"], inputs["early_retire_tier1"],
+            inputs["early_retire_tier2"], sep_ep, sep_class, constants,
+        )
 
     # Step 4: Annuity factor table → benefit table → final benefit table
     if "_compact_mortality" in inputs:
         from pension_model.core.benefit_tables import build_ann_factor_table_compact
+        # Pass config-driven tier function for non-FRS plans (FRS uses
+        # tier_logic.get_tier for backward compat until FRS config is fixed)
+        aft_tier_fn = None
+        if isinstance(constants, PlanConfig) and constants.plan_name != "frs":
+            aft_tier_fn = lambda cn, ey, da, yos: tier_fn(cn, ey, da, yos)
         aft = build_ann_factor_table_compact(sbt, inputs["_compact_mortality"], class_name, constants,
-                                             expected_icr=expected_icr)
+                                             expected_icr=expected_icr,
+                                             get_tier_fn=aft_tier_fn)
     else:
         aft = build_ann_factor_table(inputs["mortality"], class_name, constants)
     bt = build_benefit_table(aft, sbt, class_name, constants, ben_mult_fn, reduce_fn)
-    fbt = build_final_benefit_table(bt)
+    # TRS: members retire at earliest eligible age (normal or early).
+    # FRS: members retire at earliest normal retirement age.
+    use_earliest = isinstance(constants, PlanConfig) and constants.plan_name != "frs"
+    fbt = build_final_benefit_table(bt, use_earliest_retire=use_earliest)
 
     # Step 5: Benefit valuation table (with expected ICR for CB PVFB projection)
     bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn,
@@ -764,6 +784,75 @@ def _compute_aal_totals(result):
     result["total_liability_gain_loss_est"] = 0.0
 
 
+def _load_frs_inputs(class_name: str, sep_class: str,
+                     baseline_dir: Path, constants) -> dict:
+    """Load inputs for FRS from Excel + CSVs."""
+    from pension_model.core.mortality_builder import (
+        build_compact_mortality_from_excel, build_ann_factor_retire_table,
+    )
+    from pension_model.core.decrement_builder import (
+        build_withdrawal_rate_table, build_retirement_rate_tables,
+    )
+
+    raw_dir = baseline_dir.parent / "R_model" / "R_model_frs"
+    frs_inputs = raw_dir / "Florida FRS inputs.xlsx"
+    extracted_inputs = raw_dir / "Reports" / "extracted inputs"
+
+    cm = build_compact_mortality_from_excel(
+        raw_dir / "pub-2010-headcount-mort-rates.xlsx",
+        raw_dir / "mortality-improvement-scale-mp-2018-rates.xlsx",
+        class_name,
+    )
+    afr = build_ann_factor_retire_table(
+        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
+        constants.economic.dr_current, constants.benefit.cola_current_retire,
+    )
+    term_rate_avg = build_withdrawal_rate_table(frs_inputs, sep_class, 70)
+    ret_tables = build_retirement_rate_tables(frs_inputs, extracted_inputs, sep_class)
+
+    return {
+        "salary": pd.read_csv(baseline_dir / f"{class_name}_salary.csv"),
+        "headcount": pd.read_csv(baseline_dir / f"{class_name}_headcount.csv"),
+        "salary_growth": pd.read_csv(baseline_dir / "salary_growth_table.csv"),
+        "retiree_distribution": pd.read_csv(baseline_dir / "retiree_distribution.csv"),
+        "term_rate_avg": term_rate_avg,
+        "normal_retire_tier1": ret_tables["normal_retire_tier1"],
+        "normal_retire_tier2": ret_tables["normal_retire_tier2"],
+        "early_retire_tier1": ret_tables["early_retire_tier1"],
+        "early_retire_tier2": ret_tables["early_retire_tier2"],
+        "ann_factor_retire": afr,
+        "_compact_mortality": cm,
+    }
+
+
+def _load_txtrs_inputs(class_name: str, baseline_dir: Path, constants) -> dict:
+    """Load inputs for TRS from Excel workbook + external mortality files."""
+    from pension_model.core.mortality_builder import (
+        build_compact_mortality_for_plan, build_ann_factor_retire_table,
+    )
+    from pension_model.core.txtrs_loader import build_txtrs_inputs
+
+    raw_dir = baseline_dir.parent / "R_model" / "R_model_txtrs"
+
+    # Get TRS-specific inputs (salary, headcount, separation rates, etc.)
+    inputs = build_txtrs_inputs(raw_dir, constants)
+
+    # Attach reduction tables to config for get_reduce_factor lookups
+    if "_reduction_tables" in inputs:
+        object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
+
+    # Build mortality from config-driven specification
+    cm = build_compact_mortality_for_plan(constants, raw_dir, class_name)
+    afr = build_ann_factor_retire_table(
+        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
+        constants.economic.dr_current, constants.benefit.cola_current_retire,
+    )
+    inputs["ann_factor_retire"] = afr
+    inputs["_compact_mortality"] = cm
+
+    return inputs
+
+
 def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
                            constants=None,
                            on_stage=None,
@@ -781,51 +870,19 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
       - Decrement tables, salary/headcount, ann_factor_retire, retiree_distribution
     """
     from pension_model.core.workforce import project_workforce
-    from pension_model.core.mortality_builder import (
-        build_compact_mortality_from_excel, build_ann_factor_retire_table,
-    )
-    from pension_model.core.decrement_builder import (
-        build_withdrawal_rate_table, build_retirement_rate_tables,
-    )
     if constants is None:
         constants = load_frs_config()
 
     _, _, _, sep_type_fn = _make_callables(constants)
     sep_class = SEP_CLASS_MAP.get(class_name, constants.get_sep_class(class_name)
                                   if isinstance(constants, PlanConfig) else class_name)
-    raw_dir = baseline_dir.parent / "R_model" / "R_model_frs"
-    frs_inputs = raw_dir / "Florida FRS inputs.xlsx"
-    extracted_inputs = raw_dir / "Reports" / "extracted inputs"
 
-    # Build ALL tables from raw Excel — NO R computation products
-    cm = build_compact_mortality_from_excel(
-        raw_dir / "pub-2010-headcount-mort-rates.xlsx",
-        raw_dir / "mortality-improvement-scale-mp-2018-rates.xlsx",
-        class_name,
-    )
+    plan_name = constants.plan_name if hasattr(constants, "plan_name") else "frs"
 
-    afr = build_ann_factor_retire_table(
-        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
-        constants.economic.dr_current, constants.benefit.cola_current_retire,
-    )
-
-    # Build decrement tables from raw Excel
-    term_rate_avg = build_withdrawal_rate_table(frs_inputs, sep_class, 70)
-    ret_tables = build_retirement_rate_tables(frs_inputs, extracted_inputs, sep_class)
-
-    inputs = {
-        "salary": pd.read_csv(baseline_dir / f"{class_name}_salary.csv"),
-        "headcount": pd.read_csv(baseline_dir / f"{class_name}_headcount.csv"),
-        "salary_growth": pd.read_csv(baseline_dir / "salary_growth_table.csv"),
-        "retiree_distribution": pd.read_csv(baseline_dir / "retiree_distribution.csv"),
-        "term_rate_avg": term_rate_avg,
-        "normal_retire_tier1": ret_tables["normal_retire_tier1"],
-        "normal_retire_tier2": ret_tables["normal_retire_tier2"],
-        "early_retire_tier1": ret_tables["early_retire_tier1"],
-        "early_retire_tier2": ret_tables["early_retire_tier2"],
-        "ann_factor_retire": afr,
-        "_compact_mortality": cm,  # for workforce + ann_factor_table
-    }
+    if plan_name == "txtrs":
+        inputs = _load_txtrs_inputs(class_name, baseline_dir, constants)
+    else:
+        inputs = _load_frs_inputs(class_name, sep_class, baseline_dir, constants)
 
     # Build benefit tables
     if on_stage:
@@ -857,6 +914,7 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     # Run workforce projection
     if on_stage:
         on_stage("workforce")
+    cm = inputs["_compact_mortality"]
     wf = project_workforce(
         initial_active, tables["separation_rate"], ben_decisions, cm,
         tables["entrant_profile"], class_name,

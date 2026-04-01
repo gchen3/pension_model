@@ -15,7 +15,7 @@
   "benefit": {
     "db_ee_cont_rate": 0.0825,
     "db_ee_interest_rate": 0.02,
-    "cal_factor": 0.993,
+    "cal_factor": 0.9926585,
     "retire_refund_ratio": 0.3,
     "fas_years_default": 5,
     "fas_years_grandfathered": 3,
@@ -116,7 +116,7 @@
     },
     {
       "name": "intermediate",
-      "entry_year_min": 2006,
+      "entry_year_min": null,
       "entry_year_max": 2010,
       "not_grandfathered": true,
       "fas_years": 5,
@@ -124,7 +124,7 @@
         "default": {
           "normal": [
             {"min_age": 65, "min_yos": 5},
-            {"rule_of": 80, "min_age": 60, "min_yos": 5}
+            {"rule_of": 80, "min_yos": 5}
           ],
           "early": [
             {"min_age": 55, "min_yos": 5},
@@ -188,17 +188,16 @@
 
   "acfr_data": {
     "all": {
-      "outflow": 15258000000,
+      "outflow": 15258219146,
       "retiree_pop": 508701,
-      "total_active_member": 990000,
+      "total_active_member": 970872,
       "er_dc_cont_rate": 0.0,
       "val_norm_cost": 0.121
     }
   },
 
   "mortality": {
-    "base_table": "pub_2010_teacher",
-    "improvement_scale": "mp_2021",
-    "scale_multiple": 0.9
+    "base_table": "pub_2010_teacher_below_median",
+    "improvement_scale": "mp_2021"
   }
 }

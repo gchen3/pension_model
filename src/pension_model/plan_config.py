@@ -519,21 +519,23 @@ def get_ben_mult(config: PlanConfig, class_name: str, tier: str,
 # ---------------------------------------------------------------------------
 
 def get_reduce_factor(config: PlanConfig, class_name: str, tier: str,
-                      dist_age: int) -> float:
+                      dist_age: int, yos: int = 0,
+                      entry_year: int = 0) -> float:
     """Look up early retirement reduction factor from config.
 
-    Normal retirement: 1.0.  Early retirement: 1 - rate*(NRA - age).
+    Normal retirement: 1.0.  Early retirement: formula or table lookup.
     """
     if "norm" in tier:
         return 1.0
-    if "early" not in tier:
+    if "early" not in tier and "reduced" not in tier:
         return float("nan")
 
-    # Find the tier definition
-    tier_base = tier.split("_")[0] + "_" + tier.split("_")[1] if "_" in tier else tier
+    # Find the tier definition — extract tier name (before _early/_norm/_vested)
+    # E.g., "intermediate_early" → "intermediate", "grandfathered_early" → "grandfathered"
+    tier_name = tier.rsplit("_", 1)[0] if "_" in tier else tier
     tier_def = None
     for td in config.tier_defs:
-        if td["name"] == tier_base:
+        if td["name"] == tier_name:
             tier_def = td
             break
 
@@ -556,7 +558,6 @@ def get_reduce_factor(config: PlanConfig, class_name: str, tier: str,
     if "nra" in reduction:
         nra_map = reduction["nra"]
         rate = reduction.get("rate_per_year", 0.05)
-        # R checks class_name == "special" only (not admin) for special NRA
         if class_name == "special" and "special" in nra_map:
             nra = nra_map["special"]
         else:
@@ -565,16 +566,85 @@ def get_reduce_factor(config: PlanConfig, class_name: str, tier: str,
 
     # Rule-based reduction (TRS style)
     if "rules" in reduction:
-        # TRS has complex rule-based reductions; placeholder for table lookup
+        reduce_tables = getattr(config, "_reduce_tables", None)
         for rule in reduction["rules"]:
-            # For now, return the linear formula if conditions match
-            if rule.get("formula") == "linear":
+            cond = rule.get("condition", {})
+            # Check condition
+            if not _check_reduce_condition(cond, dist_age, yos, entry_year, tier_name, config):
+                continue
+            formula = rule.get("formula", "linear")
+            if formula == "linear":
                 rate = rule.get("rate_per_year", 0.05)
                 nra = rule.get("nra", 65)
-                return 1.0 - rate * (nra - dist_age)
+                return max(0.0, 1.0 - rate * (nra - dist_age))
+            elif formula == "table":
+                table_key = rule.get("table_key", "")
+                if reduce_tables and table_key in reduce_tables:
+                    return _lookup_reduce_table(reduce_tables[table_key], table_key, dist_age, yos)
+                # Fallback: use Reduced Others table values
+                return _default_reduce_factor(dist_age)
         return float("nan")
 
     return float("nan")
+
+
+def _check_reduce_condition(cond: dict, dist_age: int, yos: int,
+                            entry_year: int, tier_name: str,
+                            config: PlanConfig) -> bool:
+    """Check if a reduction rule condition is met."""
+    if not cond:
+        return True  # empty condition = always matches
+    if "min_yos" in cond and yos < cond["min_yos"]:
+        return False
+    if "min_age" in cond and dist_age < cond["min_age"]:
+        return False
+    if "rule_of" in cond and (dist_age + yos) < cond["rule_of"]:
+        return False
+    if cond.get("grandfathered") and "grandfathered" not in tier_name:
+        return False
+    if "or" in cond:
+        return any(_check_reduce_condition(sub, dist_age, yos, entry_year, tier_name, config)
+                   for sub in cond["or"])
+    return True
+
+
+def _lookup_reduce_table(table, table_key: str, dist_age: int, yos: int) -> float:
+    """Look up reduction factor from a DataFrame table."""
+    if "gft" in table_key.lower():
+        # GFT table indexed by (yos, age)
+        row = table[table["yos"] == yos]
+        if row.empty:
+            row = table[table["yos"] <= yos].tail(1)
+        if row.empty:
+            return float("nan")
+        # Find age column
+        age_cols = [c for c in table.columns if c != "yos"]
+        age_col = str(int(dist_age)) if str(int(dist_age)) in [str(c) for c in age_cols] else None
+        if age_col is None:
+            # Closest age
+            int_cols = [int(float(c)) for c in age_cols if str(c).replace(".", "").isdigit()]
+            if int_cols:
+                closest = min(int_cols, key=lambda x: abs(x - dist_age))
+                age_col = str(closest)
+        if age_col is not None:
+            val = row.iloc[0].get(int(age_col), row.iloc[0].get(float(age_col), float("nan")))
+            if val is not None and not (isinstance(val, float) and val != val):
+                return float(val)
+        return float("nan")
+    else:
+        # Others table indexed by age
+        row = table[table["age"] == dist_age]
+        if row.empty:
+            return float("nan")
+        col = [c for c in table.columns if c != "age"][0]
+        return float(row.iloc[0][col])
+
+
+def _default_reduce_factor(dist_age: int) -> float:
+    """Default Reduced Others factors (TRS) when table not available."""
+    factors = {55: 0.43, 56: 0.46, 57: 0.50, 58: 0.55, 59: 0.59,
+               60: 0.64, 61: 0.70, 62: 0.76, 63: 0.84, 64: 0.91, 65: 1.00}
+    return factors.get(dist_age, 1.0 if dist_age >= 65 else float("nan"))
 
 
 # ---------------------------------------------------------------------------
