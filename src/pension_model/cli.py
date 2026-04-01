@@ -245,22 +245,45 @@ def cmd_frs(args):
 
 
 def cmd_txtrs(args):
-    """Run the Texas TRS pension model."""
+    """Run the Texas TRS pension model (liability only)."""
+    from pension_model.plan_config import load_txtrs_config
+    from pension_model.core.pipeline import run_class_pipeline_e2e
+
     print("=" * 60)
     print("Texas TRS Pension Model Pipeline")
     print("=" * 60)
-    print()
-    print("  TRS is not yet runnable. Remaining work:")
-    print("    - Pipeline path parameterization (currently hardcoded to FRS)")
-    print("    - TRS input data ingestion (salary/headcount from TxTRS_BM_Inputs.xlsx)")
-    print("    - Mortality table parameterization (Pub-2010 teacher + MP-2021)")
-    print("    - Early retirement reduction table lookups")
-    print("    - Validation against R_model/R_model_txtrs/baseline.csv")
-    print()
-    print("  The config loads (configs/txtrs/plan_config.json) and the benefit")
-    print("  table pipeline supports CB benefit types. What's missing is the")
-    print("  data plumbing to feed TRS inputs through.")
-    sys.exit(1)
+
+    t0 = time.time()
+    constants = load_txtrs_config()
+
+    # Run liability pipeline for each class (TRS has only "all")
+    print("  Building benefit tables, workforce, and liabilities...")
+    liability_frames = []
+    for cn in constants.classes:
+        df = run_class_pipeline_e2e(cn, BASELINE, constants)
+        df["plan_name"] = constants.plan_name
+        df["class_name"] = cn
+        liability_frames.append(df)
+
+    liability_stacked = pd.concat(liability_frames, ignore_index=True)
+    elapsed = time.time() - t0
+    print(f"  Liability pipeline complete: {elapsed:.0f}s")
+
+    # Write liability output
+    output_dir = OUTPUT_BASE / constants.plan_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    liability_stacked.to_csv(output_dir / "liability_stacked.csv", index=False)
+    print(f"  Output written to {output_dir / 'liability_stacked.csv'}")
+
+    # Print summary
+    row1 = liability_stacked.iloc[0]
+    total_aal = row1.get("total_aal_est", row1.get("aal_est", 0))
+    print(f"\n  Year 1 summary:")
+    print(f"    Total AAL:  {_fmt_dollars(total_aal)}")
+    if "payroll_est" in row1:
+        print(f"    Payroll:    {_fmt_dollars(row1['payroll_est'])}")
+    if "nc_rate_est" in row1:
+        print(f"    NC Rate:    {_fmt_pct(row1['nc_rate_est'])}")
 
 
 def main():

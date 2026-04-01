@@ -15,7 +15,7 @@
   "benefit": {
     "db_ee_cont_rate": 0.0825,
     "db_ee_interest_rate": 0.02,
-    "cal_factor": 0.993,
+    "cal_factor": 0.9926585,
     "retire_refund_ratio": 0.3,
     "fas_years_default": 5,
     "fas_years_grandfathered": 3,
@@ -62,8 +62,8 @@
   "ranges": {
     "min_age": 20,
     "max_age": 120,
-    "start_year": 2024,
-    "new_year": 2024,
+    "start_year": 2022,
+    "new_year": 2022,
     "min_entry_year": 1980,
     "model_period": 30,
     "max_yos": 70
@@ -116,7 +116,7 @@
     },
     {
       "name": "intermediate",
-      "entry_year_min": 2006,
+      "entry_year_min": null,
       "entry_year_max": 2010,
       "not_grandfathered": true,
       "fas_years": 5,
@@ -188,7 +188,7 @@
 
   "acfr_data": {
     "all": {
-      "outflow": 15258000000,
+      "outflow": 15258219146,
       "retiree_pop": 508701,
       "total_active_member": 990000,
       "er_dc_cont_rate": 0.0,
@@ -197,8 +197,7 @@
   },
 
   "mortality": {
-    "base_table": "pub_2010_teacher",
-    "improvement_scale": "mp_2021",
-    "scale_multiple": 0.9
+    "base_table": "pub_2010_teacher_below_median",
+    "improvement_scale": "mp_2021"
   }
 }

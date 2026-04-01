@@ -322,11 +322,12 @@ def build_salary_benefit_table(
         df["db_ee_balance"] = contrib_shifted.groupby([df[c] for c in grp_keys]).cumsum()
     else:
         # Use _cum_fv with interest (e.g., TRS db_ee_interest_rate=0.02)
-        def _apply_cum_fv(group):
+        balances = []
+        for _, group in df.groupby(grp_keys):
             group = group.sort_values("yos")
             group["db_ee_balance"] = _cum_fv(db_ee_interest, group["_contrib"].values)
-            return group
-        df = df.groupby(grp_keys, group_keys=False).apply(_apply_cum_fv)
+            balances.append(group)
+        df = pd.concat(balances, ignore_index=True)
     df = df.drop(columns=["_contrib"])
 
     # --- Cash balance columns (when CB benefit type is active) ---
@@ -354,7 +355,10 @@ def build_salary_benefit_table(
                 group["yos"].values >= cb_vesting, group["cb_er_balance"], 0.0)
             return group
 
-        df = df.groupby(grp_keys, group_keys=False).apply(_apply_cb_balance)
+        cb_parts = []
+        for _, group in df.groupby(grp_keys):
+            cb_parts.append(_apply_cb_balance(group))
+        df = pd.concat(cb_parts, ignore_index=True)
         df = df.drop(columns=["_cal_year"])
     # --- End CB columns ---
 
