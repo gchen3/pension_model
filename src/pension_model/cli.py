@@ -236,24 +236,21 @@ def cmd_frs(args):
 
 def cmd_txtrs(args):
     """Run the Texas TRS pension model."""
-    from pension_model.plan_config import load_txtrs_config
-
     print("=" * 60)
     print("Texas TRS Pension Model Pipeline")
     print("=" * 60)
-
-    t0 = time.time()
-    constants = load_txtrs_config()
-    liability, funding, liability_stacked = run_pipeline(constants)
-    elapsed = time.time() - t0
-    print(f"  Pipeline complete: {elapsed:.0f}s")
-
-    output_dir = OUTPUT_BASE / constants.plan_name
-    print_parameters(constants)
-    write_output(funding, list(constants.classes), output_dir)
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    liability_stacked.to_csv(output_dir / "liability_stacked.csv", index=False)
+    print()
+    print("  TRS is not yet runnable. Remaining work:")
+    print("    - Pipeline path parameterization (currently hardcoded to FRS)")
+    print("    - TRS input data ingestion (salary/headcount from TxTRS_BM_Inputs.xlsx)")
+    print("    - Mortality table parameterization (Pub-2010 teacher + MP-2021)")
+    print("    - Early retirement reduction table lookups")
+    print("    - Validation against R_model/R_model_txtrs/baseline.csv")
+    print()
+    print("  The config loads (configs/txtrs/plan_config.json) and the benefit")
+    print("  table pipeline supports CB benefit types. What's missing is the")
+    print("  data plumbing to feed TRS inputs through.")
+    sys.exit(1)
 
 
 def main():
