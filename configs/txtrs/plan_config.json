@@ -128,7 +128,8 @@
           ],
           "early": [
             {"min_age": 55, "min_yos": 5},
-            {"min_yos": 30}
+            {"min_yos": 30},
+            {"rule_of": 80, "min_yos": 5}
           ],
           "vesting_yos": 5
         }
@@ -155,7 +156,8 @@
           ],
           "early": [
             {"min_age": 55, "min_yos": 5},
-            {"min_yos": 30}
+            {"min_yos": 30},
+            {"rule_of": 80, "min_yos": 5}
           ],
           "vesting_yos": 5
         }

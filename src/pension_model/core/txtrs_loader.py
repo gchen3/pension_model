@@ -311,8 +311,15 @@ def build_txtrs_inputs(raw_dir: Path, constants: PlanConfig) -> dict:
     salary_growth = load_txtrs_salary_growth(xlsx_path)
     retiree_dist = load_txtrs_retiree_distribution(xlsx_path)
 
-    # Entrant profile (needed for separation rate grid)
+    # Entrant profile from Excel sheet (R reads this directly, not derived from salary_headcount)
     entrant_raw = load_txtrs_entrant_profile(xlsx_path)
+    entrant_profile = entrant_raw.copy()
+    entrant_profile["entrant_dist"] = entrant_profile["count"] / entrant_profile["count"].sum()
+    entrant_profile = entrant_profile[["entry_age", "start_sal", "entrant_dist"]]
+
+    # Store start_year so the pipeline can set max_hist_year correctly.
+    # Without this, new entrant salaries get inflated by (1+payroll_growth)^gap
+    # where gap = start_year - max_entry_year_in_headcount.
 
     # Separation rate table (TRS-specific construction)
     sep = build_txtrs_separation_rate_table(xlsx_path, entrant_raw, constants)
@@ -324,6 +331,8 @@ def build_txtrs_inputs(raw_dir: Path, constants: PlanConfig) -> dict:
         "retiree_distribution": retiree_dist,
         # Pre-built separation rate table (bypasses FRS's build_separation_rate_table)
         "_separation_rate": sep,
+        # Entrant profile from Excel (overrides derived profile)
+        "_entrant_profile": entrant_profile,
         # Reduction tables for early retirement factor lookups
         "_reduction_tables": load_txtrs_reduction_tables(xlsx_path),
     }

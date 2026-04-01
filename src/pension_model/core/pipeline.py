@@ -151,7 +151,12 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
         inputs["salary"], inputs["headcount"], inputs["salary_growth"],
         class_name, adj_ratio, constants.ranges.start_year,
     )
-    ep = build_entrant_profile(sh)
+    # Use explicit entrant profile if provided (e.g., TRS reads from Excel sheet),
+    # otherwise derive from salary_headcount (FRS approach).
+    if "_entrant_profile" in inputs:
+        ep = inputs["_entrant_profile"]
+    else:
+        ep = build_entrant_profile(sh)
 
     # For separation rates, use the sep_class's salary/headcount if different
     if sep_class != class_name:

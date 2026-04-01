@@ -270,7 +270,14 @@ def build_salary_benefit_table(
     df = df.merge(sh_entry, on=["entry_year", "entry_age"], how="left")
 
     # Compute salary
+    # For historical cohorts (entry_year <= max_hist_year): salary from headcount data.
+    # For future cohorts: salary from entrant profile, escalated by payroll growth.
+    # max_hist_year defaults to the latest entry year in salary_headcount data,
+    # but can be overridden to start_year when entrant profile salaries are already
+    # at start_year level (e.g., TRS where entrant profile is read from Excel).
     max_hist_year = salary_headcount["entry_year"].max()
+    if hasattr(constants, "plan_name") and constants.plan_name != "frs":
+        max_hist_year = max(max_hist_year, constants.ranges.start_year)
     df["salary"] = np.where(
         df["entry_year"] <= max_hist_year,
         df["entry_salary"] * df["cumprod_salary_increase"],
