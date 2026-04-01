@@ -150,21 +150,31 @@ def run_tests():
 def cmd_calibrate(args):
     """Run calibration: compute nc_cal and pvfb_term_current from AV targets."""
     from pension_model.core.pipeline import run_class_pipeline_e2e
-    from pension_model.plan_config import load_frs_config
+    from pension_model.plan_config import load_plan_config
     from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
         load_targets_from_init_funding, run_calibration, format_diagnostics,
         write_calibration_json,
     )
 
+    plan_name = args.plan_name
+    if plan_name != "frs":
+        print(f"  Calibration for '{plan_name}' is not yet supported. Only 'frs' is available.")
+        sys.exit(1)
+
+    config_path = Path("configs") / plan_name / "plan_config.json"
+    if not config_path.exists():
+        print(f"  Config not found: {config_path}")
+        sys.exit(1)
+
     print("=" * 60)
-    print("FRS Calibration")
+    print(f"{plan_name.upper()} Calibration")
     print("=" * 60)
 
     t0 = time.time()
 
     # Load config without calibration → neutral (nc_cal=1.0, pvfb_term_current=0)
-    constants = load_frs_config(calibration_path=Path("__no_calibration__"))
+    constants = load_plan_config(config_path, calibration_path=Path("__no_calibration__"))
     cal_factor = constants.benefit.cal_factor
     classes = list(constants.classes)
 
@@ -196,7 +206,7 @@ def cmd_calibrate(args):
 
     # Write calibration JSON if requested
     if args.write:
-        output_path = Path(args.output) if args.output else Path("configs/frs/calibration.json")
+        output_path = Path(args.output) if args.output else Path(f"configs/{plan_name}/calibration.json")
         write_calibration_json(cal_factor, results, output_path)
         print(f"\n  Calibration written to {output_path}")
 
