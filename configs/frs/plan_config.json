@@ -76,6 +76,7 @@
   "tiers": [
     {
       "name": "tier_1",
+      "fas_years": 5,
       "entry_year_min": null,
       "entry_year_max": 2011,
       "eligibility": {
@@ -112,6 +113,7 @@
     },
     {
       "name": "tier_2",
+      "fas_years": 8,
       "entry_year_min": 2011,
       "entry_year_max_param": "new_year",
       "eligibility": {
@@ -147,6 +149,7 @@
     },
     {
       "name": "tier_3",
+      "fas_years": 8,
       "entry_year_min_param": "new_year",
       "entry_year_max": null,
       "eligibility_same_as": "tier_2",

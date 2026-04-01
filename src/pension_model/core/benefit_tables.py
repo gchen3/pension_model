@@ -170,30 +170,54 @@ def _cum_fv(interest_rate: float, contributions: np.ndarray) -> np.ndarray:
     return balance
 
 
+def _cum_fv_vec(interest_vec: np.ndarray, contributions: np.ndarray,
+                first_value: float = 0.0) -> np.ndarray:
+    """
+    Cumulative future value with time-varying interest rates.
+
+    Replicates R's cumFV2(interest_vec, cashflow, first_value=0):
+      balance[0] = first_value
+      balance[i] = balance[i-1] * (1 + interest_vec[i]) + contributions[i-1]
+
+    Used for cash balance account accumulation where the crediting rate
+    varies by year (actual ICR).
+    """
+    n = len(contributions)
+    balance = np.zeros(n)
+    balance[0] = first_value
+    for i in range(1, n):
+        balance[i] = balance[i - 1] * (1 + interest_vec[i]) + contributions[i - 1]
+    return balance
+
+
 def build_salary_benefit_table(
     salary_headcount: pd.DataFrame,
     entrant_profile: pd.DataFrame,
     salary_growth: pd.DataFrame,
     class_name: str,
-    constants: ModelConstants,
+    constants,
     get_tier: Callable,
+    actual_icr_series: "Optional[pd.Series]" = None,
 ) -> pd.DataFrame:
     """
     Build the salary/benefit table for all cohorts.
 
-    For each (entry_year, entry_age, yos): salary, FAS, db_ee_balance.
+    For each (entry_year, entry_age, yos): salary, FAS, db_ee_balance,
+    and when cash balance is active: cb_ee_balance, cb_er_balance, cb_balance.
 
     Args:
         salary_headcount: Output of build_salary_headcount_table().
         entrant_profile: Output of build_entrant_profile().
         salary_growth: Salary growth table with yos and class column.
         class_name: Membership class name.
-        constants: Model constants.
+        constants: Model constants or PlanConfig.
         get_tier: Callable(class_name, entry_year, age, yos) -> tier string.
+        actual_icr_series: Year→ICR series for CB accumulation (None if no CB).
 
     Returns:
         DataFrame: entry_year, entry_age, yos, term_age, tier_at_term_age,
-                   salary, fas, db_ee_balance, cumprod_salary_increase
+                   salary, fas, db_ee_balance, cumprod_salary_increase,
+                   [cb_ee_cont, cb_er_cont, cb_ee_balance, cb_er_balance, cb_balance]
     """
     r = constants.ranges
     econ = constants.economic
@@ -254,8 +278,17 @@ def build_salary_benefit_table(
         * (1 + econ.payroll_growth) ** (df["entry_year"] - max_hist_year),
     )
 
-    # FAS period depends on tier
-    df["fas_period"] = np.where(df["tier_at_term_age"].str.contains("tier_1"), 5, 8)
+    # FAS period: config-driven from tier definition, fallback to hardcoded
+    if hasattr(constants, "get_fas_years"):
+        tier_bases = df["tier_at_term_age"].str.extract(r"^(\w+)$|^(\w+_\w+)")[1].fillna(
+            df["tier_at_term_age"].str.extract(r"^(\w+_\w+)_")[0]
+        ).fillna(df["tier_at_term_age"])
+        df["fas_period"] = tier_bases.map(
+            lambda t: constants.get_fas_years(t) if pd.notna(t) else constants.fas_years_default
+        ).astype(int)
+    else:
+        # Legacy ModelConstants path: FRS hardcoded
+        df["fas_period"] = np.where(df["tier_at_term_age"].str.contains("tier_1"), 5, 8)
 
     # Drop rows with NaN salary (entry_age not in profile)
     df = df[df["salary"].notna()].copy()
@@ -268,33 +301,73 @@ def build_salary_benefit_table(
     g = df.groupby(grp_keys)
 
     # FAS: R's baseR.rollmean computes mean of PREVIOUS fas_period values (lagged)
-    # For tier_1 (fas_period=5), FAS[t] = mean(salary[t-5:t])
     # Use the first fas_period in each group (R does same)
     first_fas = g["fas_period"].transform("first").astype(int)
 
     # Compute FAS using rolling on shifted salary within groups
-    # Shift salary by 1 within group (lag), then rolling mean
     sal_shifted = g["salary"].shift(1)
-    # For each unique fas_period, compute rolling mean separately
     df["fas"] = np.nan
     for fp in df["fas_period"].unique():
         mask = first_fas == fp
         if mask.any():
-            # Rolling mean of lagged salary with window=fp, min_periods=1
             rolled = sal_shifted.where(mask).groupby([df.loc[mask, c] for c in grp_keys]).rolling(fp, min_periods=1).mean()
             df.loc[rolled.index.get_level_values(-1), "fas"] = rolled.values
 
-    # db_ee_balance: cumsum of lagged contributions
-    # balance[0] = 0, balance[i] = balance[i-1]*(1+rate) + contrib[i-1]
-    # With rate=0: balance[i] = sum(contrib[0:i])
+    # db_ee_balance: cumsum of lagged contributions with interest
+    db_ee_interest = getattr(ben, "db_ee_interest_rate", 0.0)
     df["_contrib"] = ben.db_ee_cont_rate * df["salary"]
-    contrib_shifted = df.groupby(grp_keys)["_contrib"].shift(1, fill_value=0)
-    df["db_ee_balance"] = contrib_shifted.groupby([df[c] for c in grp_keys]).cumsum()
+    if db_ee_interest == 0.0:
+        # Optimization: simple cumsum when no interest
+        contrib_shifted = df.groupby(grp_keys)["_contrib"].shift(1, fill_value=0)
+        df["db_ee_balance"] = contrib_shifted.groupby([df[c] for c in grp_keys]).cumsum()
+    else:
+        # Use _cum_fv with interest (e.g., TRS db_ee_interest_rate=0.02)
+        def _apply_cum_fv(group):
+            group = group.sort_values("yos")
+            group["db_ee_balance"] = _cum_fv(db_ee_interest, group["_contrib"].values)
+            return group
+        df = df.groupby(grp_keys, group_keys=False).apply(_apply_cum_fv)
     df = df.drop(columns=["_contrib"])
+
+    # --- Cash balance columns (when CB benefit type is active) ---
+    has_cb = hasattr(constants, "benefit_types") and "cb" in constants.benefit_types
+    cb_cfg = getattr(constants, "cash_balance", None) if has_cb else None
+    if cb_cfg is not None and actual_icr_series is not None:
+        ee_credit = cb_cfg["ee_pay_credit"]
+        er_credit = cb_cfg["er_pay_credit"]
+        cb_vesting = cb_cfg.get("vesting_yos", 5)
+
+        df["cb_ee_cont"] = ee_credit * df["salary"]
+        df["cb_er_cont"] = er_credit * df["salary"]
+        # Map calendar year for each row: year = entry_year + yos
+        df["_cal_year"] = df["entry_year"] + df["yos"]
+
+        def _apply_cb_balance(group):
+            group = group.sort_values("yos")
+            cal_years = group["_cal_year"].values
+            # Look up actual ICR for each calendar year
+            icr_vals = np.array([actual_icr_series.get(int(y), 0.04)
+                                 for y in cal_years])
+            group["cb_ee_balance"] = _cum_fv_vec(icr_vals, group["cb_ee_cont"].values)
+            group["cb_er_balance"] = _cum_fv_vec(icr_vals, group["cb_er_cont"].values)
+            group["cb_balance"] = group["cb_ee_balance"] + np.where(
+                group["yos"].values >= cb_vesting, group["cb_er_balance"], 0.0)
+            return group
+
+        df = df.groupby(grp_keys, group_keys=False).apply(_apply_cb_balance)
+        df = df.drop(columns=["_cal_year"])
+    # --- End CB columns ---
+
     df = df[df["salary"].notna()].copy()
 
-    result = df[["entry_year", "entry_age", "yos", "term_age", "tier_at_term_age",
-                 "salary", "fas", "db_ee_balance", "cumprod_salary_increase"]].reset_index(drop=True)
+    out_cols = ["entry_year", "entry_age", "yos", "term_age", "tier_at_term_age",
+                "salary", "fas", "db_ee_balance", "cumprod_salary_increase"]
+    # Include CB columns if they were computed
+    for col in ["cb_ee_cont", "cb_er_cont", "cb_ee_balance", "cb_er_balance", "cb_balance"]:
+        if col in df.columns:
+            out_cols.append(col)
+
+    result = df[out_cols].reset_index(drop=True)
     result["class_name"] = class_name
     return result
 

@@ -222,6 +222,19 @@ class PlanConfig:
         """Get the separation rate class for a given class."""
         return self.sep_class_map.get(class_name, class_name)
 
+    def get_fas_years(self, tier_name: str) -> int:
+        """Look up FAS averaging period from tier config.
+
+        Falls back to fas_years_default if tier has no fas_years.
+        """
+        tier_base = tier_name.split("_")[0]
+        if len(tier_name.split("_")) > 1:
+            tier_base = tier_name.split("_")[0] + "_" + tier_name.split("_")[1]
+        for td in self.tier_defs:
+            if td["name"] == tier_base:
+                return td.get("fas_years", self.fas_years_default)
+        return self.fas_years_default
+
     @property
     def ben_payment_ratio(self) -> float:
         """Computed from ACFR ben_payment_ratio_components if present."""
