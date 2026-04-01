@@ -1036,6 +1036,7 @@ def build_benefit_val_table(
     constants,
     get_sep_type: Callable,
     expected_icr: "Optional[float]" = None,
+    ann_factor_table: "Optional[pd.DataFrame]" = None,
 ) -> pd.DataFrame:
     """
     Build benefit valuation table with PVFB, PVFS, and normal cost.
@@ -1045,12 +1046,14 @@ def build_benefit_val_table(
 
     Args:
         salary_benefit_table: Output of build_salary_benefit_table().
-        benefit_table: Output of build_benefit_table() — needs final_benefit_table subset.
+        benefit_table: Output of build_final_benefit_table().
         sep_rate_table: Separation rate table.
         class_name: Membership class name.
         constants: Model constants or PlanConfig.
         get_sep_type: Callable(tier_str) -> "retire"|"vested"|"non_vested"
         expected_icr: Expected ICR for CB PVFB projection (None if no CB).
+        ann_factor_table: Full ann_factor_table (needed for CB surv_icr,
+            ann_factor_acr, ann_factor_term at each term_age).
 
     Returns:
         DataFrame with pvfb_db_wealth_at_current_age, pvfs_at_current_age,
@@ -1062,7 +1065,8 @@ def build_benefit_val_table(
 
     has_cb = (expected_icr is not None
               and "cb_balance" in salary_benefit_table.columns
-              and "pv_cb_benefit" in benefit_table.columns)
+              and ann_factor_table is not None
+              and "surv_icr" in ann_factor_table.columns)
 
     cb_vesting = 5
     if has_cb:
@@ -1101,13 +1105,22 @@ def build_benefit_val_table(
         ),
     )
 
-    # --- Join annuity factor data for CB PVFB if needed ---
+    # --- Extract CB annuity factors at term_age from the full ann_factor_table ---
     if has_cb:
-        # We need surv_icr, ann_factor_acr, ann_factor_term (= ann_factor * cum_mort_dr)
-        # from the full benefit_table (before final_benefit filtering).
-        # These are passed via the benefit_table which includes all dist_ages.
-        # For PVFB_CB we use values at term_age (dist_age == term_age).
-        pass  # CB columns already on sbt from salary_benefit_table
+        # At each cohort's term_age, dist_age == term_age (first row per cohort in aft).
+        # Extract surv_icr, ann_factor_acr, and ann_factor_term at that point.
+        aft = ann_factor_table
+        aft_term = aft[aft["dist_age"] == aft["entry_age"] + aft["yos"]].copy()
+        aft_term["ann_factor_adj_dr"] = aft_term["ann_factor"] * aft_term["cum_mort_dr"]
+        aft_cb_cols = ["entry_year", "entry_age", "yos"]
+        cb_join_cols = ["surv_icr", "ann_factor_acr", "ann_factor_adj_dr"]
+        sbt = sbt.merge(
+            aft_term[aft_cb_cols + cb_join_cols].drop_duplicates(subset=aft_cb_cols),
+            on=aft_cb_cols,
+            how="left",
+        )
+        for col in cb_join_cols:
+            sbt[col] = sbt[col].fillna(0.0)
 
     # Compute PVFB, PVFS, NC within each (entry_year, entry_age) group
     def _compute_pv(g):
@@ -1133,7 +1146,7 @@ def build_benefit_val_table(
         g["indv_norm_cost"] = nc_rate
         g["pvfnc_db"] = nc_rate * pvfs
 
-        # CB PVFB
+        # CB PVFB — using real annuity factor data from ann_factor_table
         if has_cb:
             cb_ee_bal = np.nan_to_num(g["cb_ee_balance"].values.astype(float), 0.0)
             cb_ee_cont = np.nan_to_num(g["cb_ee_cont"].values.astype(float), 0.0)
@@ -1141,34 +1154,15 @@ def build_benefit_val_table(
             cb_er_cont = np.nan_to_num(g["cb_er_cont"].values.astype(float), 0.0)
             yos_arr = g["yos"].values.astype(float)
             sep_type_arr = g["sep_type"].values
-
-            # For PVFB_CB, we need surv_icr, ann_factor_acr, and ann_factor_adj_dr
-            # at each yos. These come from the ann_factor_table at dist_age == term_age.
-            # Since we don't have the full table here, compute from scratch using
-            # expected_icr and the DR-based factors we do have.
-            n_rows = len(g)
-            # surv_icr[j] = (1 + expected_icr)^(-j) approximately (simplified)
-            surv_icr_arr = 1.0 / (1 + expected_icr) ** np.arange(n_rows)
-            # ann_factor_acr: use a simple actuarial annuity approximation
-            # In practice this should come from the ann_factor_table, but for
-            # the PVFB_CB re-projection from each starting YOS, R uses the
-            # expected_icr to re-project, so a simplified approach is acceptable.
-            # We use a constant ann_factor_acr based on remaining life expectancy.
-            # TODO: pass ann_factor_acr from the benefit table for full accuracy
-            cb_cfg = getattr(constants, "cash_balance", None)
-            acr_val = cb_cfg.get("annuity_conversion_rate", 0.04) if cb_cfg else 0.04
-            # Simple annuity factor: sum of 1/(1+acr)^t for t=0..remaining
-            remaining_years = max(1, 120 - (g["entry_age"].iloc[0] + n_rows // 2))
-            simple_ann_acr = np.full(n_rows, sum(1 / (1 + acr_val) ** t
-                                                  for t in range(remaining_years)))
-            # ann_factor_adj_dr at term_age: approximate as 1.0 (will be refined)
-            ann_adj_dr = np.ones(n_rows)
+            surv_icr_arr = np.nan_to_num(g["surv_icr"].values.astype(float), 0.0)
+            ann_acr_arr = np.nan_to_num(g["ann_factor_acr"].values.astype(float), 0.0)
+            ann_adj_arr = np.nan_to_num(g["ann_factor_adj_dr"].values.astype(float), 0.0)
 
             pvfb_cb = _get_pvfb_cb(
                 cb_ee_bal, cb_ee_cont, cb_er_bal, cb_er_cont,
                 cb_vesting, r,
                 yos_arr, sep_type_arr, sep, dr_arr, expected_icr,
-                surv_icr_arr, simple_ann_acr, ann_adj_dr,
+                surv_icr_arr, ann_acr_arr, ann_adj_arr,
             )
             nc_rate_cb = pvfb_cb[0] / pvfs[0] if pvfs[0] > 0 else 0.0
             g["pvfb_cb_at_current_age"] = pvfb_cb

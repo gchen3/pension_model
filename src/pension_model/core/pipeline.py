@@ -161,7 +161,8 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     fbt = build_final_benefit_table(bt)
 
     # Step 5: Benefit valuation table
-    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn)
+    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn,
+                                  ann_factor_table=aft)
 
     return {
         "salary_headcount": sh,
