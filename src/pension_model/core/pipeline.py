@@ -176,29 +176,62 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     }
 
 
+def _get_bt_columns(bt: str) -> dict:
+    """Map benefit type to its column names in benefit_val_table."""
+    if bt == "db":
+        return {"pvfb": "pvfb_db_wealth_at_current_age", "pvfnc": "pvfnc_db",
+                "nc": "indv_norm_cost"}
+    elif bt == "cb":
+        return {"pvfb": "pvfb_cb_at_current_age", "pvfnc": "pvfnc_cb",
+                "nc": "indv_norm_cost_cb"}
+    # DC has no liability columns
+    return {"pvfb": None, "pvfnc": None, "nc": None}
+
+
+def _allocate_members(wf, benefit_types, design_ratios, new_year):
+    """Allocate workforce members to benefit type buckets (legacy/new)."""
+    ey = wf["entry_year"]
+    n = wf["n_active"]
+    for bt in benefit_types:
+        before, after, new = design_ratios[bt]
+        wf[f"n_{bt}_legacy"] = np.where(
+            ey < new_year, np.where(ey < 2018, n * before, n * after), 0.0)
+        wf[f"n_{bt}_new"] = np.where(ey < new_year, 0.0, n * new)
+    return wf
+
+
 def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
                              class_name: str, constants) -> pd.DataFrame:
     """
-    Compute active member liability by year (R liability model lines 77-120).
+    Compute active member liability by year.
 
-    Joins workforce active with benefit_val_table, allocates to plan designs,
-    aggregates by year.
+    Generalizes across benefit types: for each bt in config, allocates
+    members and computes payroll_{bt}_{period}_est, aal_active_{bt}_{period}_est, etc.
     """
     r = constants.ranges
-    is_special = class_name == "special"
-    db_before, db_after, db_new = constants.plan_design.get_ratios(is_special)
     new_year = r.new_year
+
+    # Get design ratios — use generalized method if available, else legacy
+    if hasattr(constants, "get_design_ratios"):
+        design_ratios = constants.get_design_ratios(class_name)
+        benefit_types = list(constants.benefit_types)
+    else:
+        is_special = class_name == "special"
+        db_b, db_a, db_n = constants.plan_design.get_ratios(is_special)
+        design_ratios = {"db": (db_b, db_a, db_n), "dc": (1 - db_b, 1 - db_a, 1 - db_n)}
+        benefit_types = ["db", "dc"]
 
     wf = wf_active[wf_active["year"] <= r.start_year + r.model_period].copy()
     wf["entry_year"] = wf["year"] - (wf["age"] - wf["entry_age"])
-
-    # Join with benefit_val_table
-    bvt_cols = ["entry_year", "entry_age", "yos", "salary",
-                "pvfb_db_wealth_at_current_age", "pvfnc_db", "pvfs_at_current_age",
-                "indv_norm_cost"]
-    # Compute yos for the join
     wf["yos"] = wf["age"] - wf["entry_age"]
 
+    # Join with benefit_val_table
+    bvt_cols = ["entry_year", "entry_age", "yos", "salary"]
+    for bt in benefit_types:
+        cols = _get_bt_columns(bt)
+        for c in cols.values():
+            if c is not None and c in benefit_val.columns and c not in bvt_cols:
+                bvt_cols.append(c)
     wf = wf.merge(
         benefit_val[bvt_cols].drop_duplicates(subset=["entry_year", "entry_age", "yos"]),
         on=["entry_year", "entry_age", "yos"],
@@ -206,66 +239,98 @@ def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
     )
     wf = wf.fillna(0)
 
-    # Plan design allocation
-    ey = wf["entry_year"]
-    n = wf["n_active"]
-    wf["n_db_legacy"] = np.where(ey < 2018, n * db_before, np.where(ey < new_year, n * db_after, 0.0))
-    wf["n_db_new"] = np.where(ey < new_year, 0.0, n * db_new)
-    wf["n_dc_legacy"] = np.where(ey < 2018, n * (1 - db_before), np.where(ey < new_year, n * (1 - db_after), 0.0))
-    wf["n_dc_new"] = np.where(ey < new_year, 0.0, n * (1 - db_new))
+    # Allocate members to benefit types
+    wf = _allocate_members(wf, benefit_types, design_ratios, new_year)
 
-    # Aggregate by year
+    # Aggregate by year — build result dict dynamically
     def _agg(g):
         sal = g["salary"].values
-        pvfb = g["pvfb_db_wealth_at_current_age"].values
-        pvfnc = g["pvfnc_db"].values
-        nc = g["indv_norm_cost"].values
-        ndl = g["n_db_legacy"].values
-        ndn = g["n_db_new"].values
-        ndcl = g["n_dc_legacy"].values
-        ndcn = g["n_dc_new"].values
-
-        return pd.Series({
-            "payroll_db_legacy_est": (sal * ndl).sum(),
-            "payroll_db_new_est": (sal * ndn).sum(),
-            "payroll_dc_legacy_est": (sal * ndcl).sum(),
-            "payroll_dc_new_est": (sal * ndcn).sum(),
+        out = {
             "total_payroll_est": (sal * g["n_active"].values).sum(),
-            "pvfb_active_db_legacy_est": (pvfb * ndl).sum(),
-            "pvfb_active_db_new_est": (pvfb * ndn).sum(),
-            "pvfnc_db_legacy_est": (pvfnc * ndl).sum(),
-            "pvfnc_db_new_est": (pvfnc * ndn).sum(),
             "total_n_active": g["n_active"].sum(),
-        })
+        }
+        for bt in benefit_types:
+            nl = g[f"n_{bt}_legacy"].values
+            nn = g[f"n_{bt}_new"].values
+            out[f"payroll_{bt}_legacy_est"] = (sal * nl).sum()
+            out[f"payroll_{bt}_new_est"] = (sal * nn).sum()
+
+            cols = _get_bt_columns(bt)
+            if cols["pvfb"] is not None and cols["pvfb"] in g.columns:
+                pvfb = g[cols["pvfb"]].values
+                pvfnc = g[cols["pvfnc"]].values
+                out[f"pvfb_active_{bt}_legacy_est"] = (pvfb * nl).sum()
+                out[f"pvfb_active_{bt}_new_est"] = (pvfb * nn).sum()
+                out[f"pvfnc_{bt}_legacy_est"] = (pvfnc * nl).sum()
+                out[f"pvfnc_{bt}_new_est"] = (pvfnc * nn).sum()
+        return pd.Series(out)
 
     result = wf.groupby("year").apply(_agg).reset_index()
 
-    # Derived columns
-    result["payroll_db_est"] = result["payroll_db_legacy_est"] + result["payroll_db_new_est"]
-    payroll_legacy = result["payroll_db_legacy_est"].values
-    nc_legacy_num = wf.groupby("year").apply(
-        lambda g: (g["indv_norm_cost"] * g["salary"] * g["n_db_legacy"]).sum()).values
-    result["nc_rate_db_legacy_est"] = np.divide(
-        nc_legacy_num, payroll_legacy, out=np.zeros_like(payroll_legacy), where=payroll_legacy != 0)
+    # Derived columns for each benefit type with liability
+    for bt in benefit_types:
+        cols = _get_bt_columns(bt)
+        if cols["nc"] is None or cols["nc"] not in wf.columns:
+            continue
 
-    payroll_new = result["payroll_db_new_est"].values
-    nc_new_num = wf.groupby("year").apply(
-        lambda g: (g["indv_norm_cost"] * g["salary"] * g["n_db_new"]).sum()).values
-    result["nc_rate_db_new_est"] = np.divide(
-        nc_new_num, payroll_new, out=np.zeros_like(payroll_new), where=payroll_new != 0)
-    result["aal_active_db_legacy_est"] = result["pvfb_active_db_legacy_est"] - result["pvfnc_db_legacy_est"]
-    result["aal_active_db_new_est"] = result["pvfb_active_db_new_est"] - result["pvfnc_db_new_est"]
+        nc_col = cols["nc"]
+        for period in ["legacy", "new"]:
+            pay_col = f"payroll_{bt}_{period}_est"
+            if pay_col not in result.columns:
+                continue
+            payroll_arr = result[pay_col].values
+            nc_num = wf.groupby("year").apply(
+                lambda g, _bt=bt, _nc=nc_col, _p=period: (
+                    g[_nc] * g["salary"] * g[f"n_{_bt}_{_p}"]
+                ).sum()).values
+            result[f"nc_rate_{bt}_{period}_est"] = np.divide(
+                nc_num, payroll_arr, out=np.zeros_like(payroll_arr), where=payroll_arr != 0)
+
+            pvfb_col = f"pvfb_active_{bt}_{period}_est"
+            pvfnc_col = f"pvfnc_{bt}_{period}_est"
+            if pvfb_col in result.columns and pvfnc_col in result.columns:
+                result[f"aal_active_{bt}_{period}_est"] = result[pvfb_col] - result[pvfnc_col]
+
+    # Backward compat: payroll_db_est
+    if "payroll_db_legacy_est" in result.columns:
+        result["payroll_db_est"] = result["payroll_db_legacy_est"] + result.get("payroll_db_new_est", 0)
 
     return result
+
+
+def _get_design_ratios(constants, class_name):
+    """Get design ratios and benefit types from constants (PlanConfig or ModelConstants)."""
+    if hasattr(constants, "get_design_ratios"):
+        return constants.get_design_ratios(class_name), list(constants.benefit_types)
+    is_special = class_name == "special"
+    db_b, db_a, db_n = constants.plan_design.get_ratios(is_special)
+    return {"db": (db_b, db_a, db_n), "dc": (1 - db_b, 1 - db_a, 1 - db_n)}, ["db", "dc"]
+
+
+def _allocate_term(wf, pop_col, design_ratios, benefit_types, new_year):
+    """Allocate term/refund/retire workforce to benefit type buckets.
+
+    pop_col is e.g. "n_term", "n_refund", "n_retire".
+    Creates columns like "n_term_db_legacy", "n_term_db_new", etc.
+    """
+    ey = wf["entry_year"]
+    n = wf[pop_col]
+    # Strip the "n_" prefix if present for cleaner column names
+    base = pop_col[2:] if pop_col.startswith("n_") else pop_col
+    for bt in benefit_types:
+        before, after, new = design_ratios[bt]
+        wf[f"n_{base}_{bt}_legacy"] = np.where(
+            ey < new_year, np.where(ey < 2018, n * before, n * after), 0.0)
+        wf[f"n_{base}_{bt}_new"] = np.where(ey < new_year, 0.0, n * new)
+    return wf
 
 
 def compute_term_liability(wf_term: pd.DataFrame, benefit_val: pd.DataFrame,
                            benefit: pd.DataFrame, class_name: str,
                            constants) -> pd.DataFrame:
-    """Compute projected terminated vested liability by year (R lines 124-149)."""
+    """Compute projected terminated vested liability by year."""
     r = constants.ranges
-    is_special = class_name == "special"
-    db_before, db_after, db_new = constants.plan_design.get_ratios(is_special)
+    design_ratios, benefit_types = _get_design_ratios(constants, class_name)
 
     wf = wf_term[(wf_term["year"] <= r.start_year + r.model_period) & (wf_term["n_term"] > 0)].copy()
     wf["entry_year"] = wf["year"] - (wf["age"] - wf["entry_age"])
@@ -278,71 +343,87 @@ def compute_term_liability(wf_term: pd.DataFrame, benefit_val: pd.DataFrame,
                   on=["entry_age", "entry_year", "term_year"], how="left")
 
     # Join benefit_table for cum_mort_dr at current age/year
-    # Must include term_year to avoid many-to-many (multiple yos per entry_age/entry_year/dist_age/dist_year)
     bt_cols = benefit[["entry_age", "entry_year", "dist_age", "dist_year", "term_year", "cum_mort_dr"]].drop_duplicates()
     wf = wf.merge(bt_cols, left_on=["entry_age", "entry_year", "age", "year", "term_year"],
                   right_on=["entry_age", "entry_year", "dist_age", "dist_year", "term_year"], how="left")
 
     wf["pvfb_db_term"] = wf["pvfb_db_at_term_age"] / wf["cum_mort_dr"]
 
-    ey = wf["entry_year"]
-    wf["n_term_db_legacy"] = np.where(ey < 2018, wf["n_term"] * db_before,
-                             np.where(ey < r.new_year, wf["n_term"] * db_after, 0.0))
-    wf["n_term_db_new"] = np.where(ey < r.new_year, 0.0, wf["n_term"] * db_new)
+    wf = _allocate_term(wf, "n_term", design_ratios, benefit_types, r.new_year)
 
-    return wf.groupby("year").agg(
-        aal_term_db_legacy_est=pd.NamedAgg("pvfb_db_term",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_term_db_legacy"]).sum()),
-        aal_term_db_new_est=pd.NamedAgg("pvfb_db_term",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_term_db_new"]).sum()),
-    ).reset_index()
+    # Aggregate by benefit type
+    agg_dict = {}
+    for bt in benefit_types:
+        if bt == "dc":
+            continue
+        val_col = "pvfb_db_term"
+        for period in ["legacy", "new"]:
+            n_col = f"n_term_{bt}_{period}"
+            if n_col in wf.columns:
+                agg_dict[f"aal_term_{bt}_{period}_est"] = pd.NamedAgg(
+                    val_col, aggfunc=lambda x, _n=n_col: (x * wf.loc[x.index, _n]).sum())
+
+    if not agg_dict:
+        return pd.DataFrame({"year": wf["year"].unique()})
+    return wf.groupby("year").agg(**agg_dict).reset_index()
 
 
 def compute_refund_liability(wf_refund: pd.DataFrame, benefit: pd.DataFrame,
                              class_name: str, constants) -> pd.DataFrame:
-    """Compute refund liability by year (R lines 154-169)."""
+    """Compute refund liability by year."""
     r = constants.ranges
-    is_special = class_name == "special"
-    db_before, db_after, db_new = constants.plan_design.get_ratios(is_special)
+    design_ratios, benefit_types = _get_design_ratios(constants, class_name)
 
     wf = wf_refund[(wf_refund["year"] <= r.start_year + r.model_period) & (wf_refund["n_refund"] > 0)].copy()
     wf["entry_year"] = wf["year"] - (wf["age"] - wf["entry_age"])
 
-    # Join benefit_table for db_ee_balance (include term_year to avoid many-to-many)
-    bt_cols = benefit[["entry_age", "entry_year", "dist_age", "dist_year", "term_year", "db_ee_balance"]].drop_duplicates()
+    # Join benefit_table for db_ee_balance (+ cb_balance if present)
+    bt_join_cols = ["entry_age", "entry_year", "dist_age", "dist_year", "term_year", "db_ee_balance"]
+    has_cb_bal = "cb_balance" in benefit.columns
+    if has_cb_bal:
+        bt_join_cols.append("cb_balance")
+    bt_cols = benefit[bt_join_cols].drop_duplicates()
     wf = wf.merge(bt_cols, left_on=["entry_age", "entry_year", "age", "year", "term_year"],
                   right_on=["entry_age", "entry_year", "dist_age", "dist_year", "term_year"], how="left")
 
-    ey = wf["entry_year"]
-    wf["n_refund_db_legacy"] = np.where(ey < 2018, wf["n_refund"] * db_before,
-                               np.where(ey < r.new_year, wf["n_refund"] * db_after, 0.0))
-    wf["n_refund_db_new"] = np.where(ey < r.new_year, 0.0, wf["n_refund"] * db_new)
+    wf = _allocate_term(wf, "n_refund", design_ratios, benefit_types, r.new_year)
 
-    return wf.groupby("year").agg(
-        refund_db_legacy_est=pd.NamedAgg("db_ee_balance",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_refund_db_legacy"]).sum()),
-        refund_db_new_est=pd.NamedAgg("db_ee_balance",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_refund_db_new"]).sum()),
-    ).reset_index()
+    agg_dict = {}
+    for bt in benefit_types:
+        if bt == "dc":
+            continue
+        val_col = "cb_balance" if bt == "cb" and has_cb_bal else "db_ee_balance"
+        for period in ["legacy", "new"]:
+            n_col = f"n_refund_{bt}_{period}"
+            if n_col in wf.columns:
+                agg_dict[f"refund_{bt}_{period}_est"] = pd.NamedAgg(
+                    val_col, aggfunc=lambda x, _n=n_col: (x * wf.loc[x.index, _n]).sum())
+
+    if not agg_dict:
+        return pd.DataFrame({"year": wf["year"].unique()})
+    return wf.groupby("year").agg(**agg_dict).reset_index()
 
 
 def compute_retire_liability(wf_retire: pd.DataFrame, benefit: pd.DataFrame,
                              ann_factor: pd.DataFrame, class_name: str,
                              constants) -> pd.DataFrame:
-    """Compute projected retiree liability by year (R lines 174-200)."""
+    """Compute projected retiree liability by year."""
     r = constants.ranges
-    is_special = class_name == "special"
-    db_before, db_after, db_new = constants.plan_design.get_ratios(is_special)
+    design_ratios, benefit_types = _get_design_ratios(constants, class_name)
 
     wf = wf_retire[wf_retire["year"] <= r.start_year + r.model_period].copy()
     wf["entry_year"] = wf["year"] - (wf["age"] - wf["entry_age"])
 
-    # Join benefit_table for db_benefit and cola at retirement year (include term_year)
-    bt_cols = benefit[["entry_age", "entry_year", "dist_year", "term_year", "db_benefit", "cola"]].drop_duplicates()
+    # Join benefit_table for db_benefit, cola (+ cb_benefit if present)
+    bt_join_cols = ["entry_age", "entry_year", "dist_year", "term_year", "db_benefit", "cola"]
+    has_cb_ben = "cb_benefit" in benefit.columns
+    if has_cb_ben:
+        bt_join_cols.append("cb_benefit")
+    bt_cols = benefit[bt_join_cols].drop_duplicates()
     wf = wf.merge(bt_cols, left_on=["entry_age", "entry_year", "retire_year", "term_year"],
                   right_on=["entry_age", "entry_year", "dist_year", "term_year"], how="left")
 
-    # Join ann_factor_table for ann_factor at current year (include term_year)
+    # Join ann_factor_table for ann_factor at current year
     af_cols = ann_factor[["entry_age", "entry_year", "dist_year", "term_year", "ann_factor"]].drop_duplicates()
     wf = wf.merge(af_cols, left_on=["entry_age", "entry_year", "year", "term_year"],
                   right_on=["entry_age", "entry_year", "dist_year", "term_year"],
@@ -351,21 +432,29 @@ def compute_retire_liability(wf_retire: pd.DataFrame, benefit: pd.DataFrame,
     wf["db_benefit_final"] = wf["db_benefit"] * (1 + wf["cola"]) ** (wf["year"] - wf["retire_year"])
     wf["pvfb_db_retire"] = wf["db_benefit_final"] * (wf["ann_factor"] - 1)
 
-    ey = wf["entry_year"]
-    wf["n_retire_db_legacy"] = np.where(ey < 2018, wf["n_retire"] * db_before,
-                               np.where(ey < r.new_year, wf["n_retire"] * db_after, 0.0))
-    wf["n_retire_db_new"] = np.where(ey < r.new_year, 0.0, wf["n_retire"] * db_new)
+    if has_cb_ben:
+        wf["cb_benefit_final"] = wf["cb_benefit"] * (1 + wf["cola"]) ** (wf["year"] - wf["retire_year"])
+        wf["pvfb_cb_retire"] = wf["cb_benefit_final"] * (wf["ann_factor"] - 1)
 
-    return wf.groupby("year").agg(
-        retire_ben_db_legacy_est=pd.NamedAgg("db_benefit_final",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_retire_db_legacy"]).sum()),
-        retire_ben_db_new_est=pd.NamedAgg("db_benefit_final",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_retire_db_new"]).sum()),
-        aal_retire_db_legacy_est=pd.NamedAgg("pvfb_db_retire",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_retire_db_legacy"]).sum()),
-        aal_retire_db_new_est=pd.NamedAgg("pvfb_db_retire",
-            aggfunc=lambda x: (x * wf.loc[x.index, "n_retire_db_new"]).sum()),
-    ).reset_index()
+    wf = _allocate_term(wf, "n_retire", design_ratios, benefit_types, r.new_year)
+
+    agg_dict = {}
+    for bt in benefit_types:
+        if bt == "dc":
+            continue
+        ben_col = "cb_benefit_final" if bt == "cb" and has_cb_ben else "db_benefit_final"
+        pvfb_col = "pvfb_cb_retire" if bt == "cb" and has_cb_ben else "pvfb_db_retire"
+        for period in ["legacy", "new"]:
+            n_col = f"n_retire_{bt}_{period}"
+            if n_col in wf.columns:
+                agg_dict[f"retire_ben_{bt}_{period}_est"] = pd.NamedAgg(
+                    ben_col, aggfunc=lambda x, _n=n_col: (x * wf.loc[x.index, _n]).sum())
+                agg_dict[f"aal_retire_{bt}_{period}_est"] = pd.NamedAgg(
+                    pvfb_col, aggfunc=lambda x, _n=n_col: (x * wf.loc[x.index, _n]).sum())
+
+    if not agg_dict:
+        return pd.DataFrame({"year": wf["year"].unique()})
+    return wf.groupby("year").agg(**agg_dict).reset_index()
 
 
 # ---------------------------------------------------------------------------
@@ -580,44 +669,72 @@ def run_class_pipeline(class_name: str, baseline_dir: Path,
     result = result.merge(retire_current, on="year", how="left")
     result = result.merge(term_current, on="year", how="left")
     result = result.fillna(0)
+    _compute_aal_totals(result)
+    return result
 
-    # Compute total AAL (R liability model lines 259-266)
-    result["aal_legacy_est"] = (
-        result["aal_active_db_legacy_est"]
-        + result["aal_term_db_legacy_est"]
-        + result["aal_retire_db_legacy_est"]
-        + result["aal_retire_current_est"]
-        + result["aal_term_current_est"]
-    )
-    result["aal_new_est"] = (
-        result["aal_active_db_new_est"]
-        + result["aal_term_db_new_est"]
-        + result["aal_retire_db_new_est"]
-    )
-    result["total_aal_est"] = result["aal_legacy_est"] + result["aal_new_est"]
 
-    # Total benefit/refund outflows
-    result["tot_ben_refund_legacy_est"] = (
-        result["refund_db_legacy_est"]
-        + result["retire_ben_db_legacy_est"]
-        + result["retire_ben_current_est"]
-        + result["retire_ben_term_est"]
-    )
-    result["tot_ben_refund_new_est"] = (
-        result["refund_db_new_est"]
-        + result["retire_ben_db_new_est"]
-    )
-    # Liability gain/loss (zero under baseline: experience = assumptions)
+def _sum_cols(df, pattern_parts, default=0.0):
+    """Sum all columns matching f"aal_{component}_{bt}_{period}_est" patterns."""
+    total = default
+    for col in df.columns:
+        for part in pattern_parts:
+            if part in col:
+                total = total + df[col]
+                break
+    return total
+
+
+def _compute_aal_totals(result):
+    """Compute aal_legacy_est, aal_new_est, total_aal_est, tot_ben_refund from
+    whatever benefit-type columns are present. Works for any combination of DB/CB/DC."""
+    # Legacy AAL = sum of aal_active_{bt}_legacy + aal_term_{bt}_legacy + aal_retire_{bt}_legacy
+    #              + retire_current + term_current
+    legacy_aal = 0.0
+    new_aal = 0.0
+    legacy_ben = 0.0
+    new_ben = 0.0
+
+    for col in result.columns:
+        if col.startswith("aal_active_") and col.endswith("_legacy_est"):
+            legacy_aal = legacy_aal + result[col]
+        elif col.startswith("aal_active_") and col.endswith("_new_est"):
+            new_aal = new_aal + result[col]
+        elif col.startswith("aal_term_") and col.endswith("_legacy_est") and "current" not in col:
+            legacy_aal = legacy_aal + result[col]
+        elif col.startswith("aal_term_") and col.endswith("_new_est") and "current" not in col:
+            new_aal = new_aal + result[col]
+        elif col.startswith("aal_retire_") and col.endswith("_legacy_est") and "current" not in col:
+            legacy_aal = legacy_aal + result[col]
+        elif col.startswith("aal_retire_") and col.endswith("_new_est") and "current" not in col:
+            new_aal = new_aal + result[col]
+        elif col.startswith("refund_") and col.endswith("_legacy_est"):
+            legacy_ben = legacy_ben + result[col]
+        elif col.startswith("refund_") and col.endswith("_new_est"):
+            new_ben = new_ben + result[col]
+        elif col.startswith("retire_ben_") and col.endswith("_legacy_est") and "current" not in col:
+            legacy_ben = legacy_ben + result[col]
+        elif col.startswith("retire_ben_") and col.endswith("_new_est") and "current" not in col:
+            new_ben = new_ben + result[col]
+
+    # Current retiree and term vested (not benefit-type-specific)
+    if "aal_retire_current_est" in result.columns:
+        legacy_aal = legacy_aal + result["aal_retire_current_est"]
+    if "aal_term_current_est" in result.columns:
+        legacy_aal = legacy_aal + result["aal_term_current_est"]
+    if "retire_ben_current_est" in result.columns:
+        legacy_ben = legacy_ben + result["retire_ben_current_est"]
+    if "retire_ben_term_est" in result.columns:
+        legacy_ben = legacy_ben + result["retire_ben_term_est"]
+
+    result["aal_legacy_est"] = legacy_aal
+    result["aal_new_est"] = new_aal
+    result["total_aal_est"] = legacy_aal + new_aal
+    result["tot_ben_refund_legacy_est"] = legacy_ben
+    result["tot_ben_refund_new_est"] = new_ben
+    result["tot_ben_refund_est"] = legacy_ben + new_ben
     result["liability_gain_loss_legacy_est"] = 0.0
     result["liability_gain_loss_new_est"] = 0.0
     result["total_liability_gain_loss_est"] = 0.0
-
-    result["tot_ben_refund_est"] = (
-        result["tot_ben_refund_legacy_est"]
-        + result["tot_ben_refund_new_est"]
-    )
-
-    return result
 
 
 def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
@@ -749,26 +866,5 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     result = result.merge(retire_current, on="year", how="left")
     result = result.merge(term_current, on="year", how="left")
     result = result.fillna(0)
-
-    result["aal_legacy_est"] = (
-        result["aal_active_db_legacy_est"] + result["aal_term_db_legacy_est"]
-        + result["aal_retire_db_legacy_est"] + result["aal_retire_current_est"]
-        + result["aal_term_current_est"])
-    result["aal_new_est"] = (
-        result["aal_active_db_new_est"] + result["aal_term_db_new_est"]
-        + result["aal_retire_db_new_est"])
-    result["total_aal_est"] = result["aal_legacy_est"] + result["aal_new_est"]
-    result["tot_ben_refund_legacy_est"] = (
-        result["refund_db_legacy_est"] + result["retire_ben_db_legacy_est"]
-        + result["retire_ben_current_est"] + result["retire_ben_term_est"])
-    result["tot_ben_refund_new_est"] = (
-        result["refund_db_new_est"] + result["retire_ben_db_new_est"])
-    result["tot_ben_refund_est"] = (
-        result["tot_ben_refund_legacy_est"] + result["tot_ben_refund_new_est"])
-    result["liability_gain_loss_legacy_est"] = 0.0
-    result["liability_gain_loss_new_est"] = 0.0
-    result["total_liability_gain_loss_est"] = 0.0
-    result["retire_ben_db_new_est"] = result.get("retire_ben_db_new_est", 0)
-    result["refund_db_new_est"] = result.get("refund_db_new_est", 0)
-
+    _compute_aal_totals(result)
     return result

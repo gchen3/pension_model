@@ -210,6 +210,43 @@ class PlanConfig:
 
         return SimpleNamespace(get_ratios=_get_ratios)
 
+    def get_design_ratios(self, class_name: str) -> Dict[str, Tuple[float, float, float]]:
+        """Return plan design ratios for each benefit type.
+
+        Returns {bt: (before, after, new)} for each bt in benefit_types.
+        'before' = pre-new_year legacy, 'after' = post-2018/pre-new_year,
+        'new' = post-new_year new hires.
+
+        For FRS: {"db": (0.75, 0.25, 0.25), "dc": (0.25, 0.75, 0.75)}
+        For TRS: {"db": (1.0, 1.0, 1.0), "cb": (0.0, 0.0, 0.0)}
+        """
+        group = self.class_group(class_name)
+        pd_defs = self.plan_design_defs
+        ratios = pd_defs.get(group, pd_defs.get("default", {}))
+
+        result = {}
+        for bt in self.benefit_types:
+            if bt == "db":
+                before = ratios.get("before_2018", ratios.get("before_new_year", 1.0))
+                after = ratios.get("after_2018", ratios.get("after_new_year", before))
+                new = ratios.get("new", ratios.get("new_db", 1.0))
+                result["db"] = (before, after, new)
+            elif bt == "cb":
+                before = ratios.get("before_cb", 0.0)
+                after = ratios.get("after_cb", 0.0)
+                new = ratios.get("new_cb", 0.0)
+                result["cb"] = (before, after, new)
+            elif bt == "dc":
+                # DC is the complement: whatever isn't DB or CB
+                db_before, db_after, db_new = result.get("db", (1.0, 1.0, 1.0))
+                cb_before, cb_after, cb_new = result.get("cb", (0.0, 0.0, 0.0))
+                result["dc"] = (
+                    1.0 - db_before - cb_before,
+                    1.0 - db_after - cb_after,
+                    1.0 - db_new - cb_new,
+                )
+        return result
+
     def class_group(self, class_name: str) -> str:
         """Return the group name for a given class."""
         return self._class_to_group.get(class_name, "default")
