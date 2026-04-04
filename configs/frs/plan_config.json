@@ -2,6 +2,10 @@
   "plan_name": "frs",
   "plan_description": "Florida Retirement System",
 
+  "data": {
+    "data_dir": "data/frs"
+  },
+
   "economic": {
     "dr_current": 0.067,
     "dr_new": 0.067,

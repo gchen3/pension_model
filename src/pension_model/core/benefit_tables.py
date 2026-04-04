@@ -48,6 +48,11 @@ def _get_salary_growth_col(class_name: str, constants=None) -> str:
 # 1. Salary / headcount table construction
 # ---------------------------------------------------------------------------
 
+def _is_long_format(df: pd.DataFrame, value_col: str) -> bool:
+    """Check if a DataFrame is already in long format (age, yos, value)."""
+    return {"age", "yos", value_col}.issubset(df.columns)
+
+
 def build_salary_headcount_table(
     salary_wide: pd.DataFrame,
     headcount_wide: pd.DataFrame,
@@ -58,24 +63,28 @@ def build_salary_headcount_table(
     constants=None,
 ) -> pd.DataFrame:
     """
-    Convert wide-format salary/headcount to long-format with entry_salary.
+    Build long-format salary/headcount table with entry_salary.
 
-    Replicates R's get_salary_headcount_table().
+    Accepts salary/headcount in either format:
+      - Wide: age column + YOS columns (legacy, melted internally)
+      - Long: age, yos, salary/count columns (stage 3 format, used directly)
 
     Args:
-        salary_wide: Wide table with age rows, yos columns, salary values.
-        headcount_wide: Wide table with age rows, yos columns, count values.
-        salary_growth: Table with 'yos' and cumulative salary growth column.
+        salary_wide: Salary data (wide or long format).
+        headcount_wide: Headcount data (wide or long format).
+        salary_growth: Table with 'yos' and salary growth column.
         class_name: Membership class name.
         adjustment_ratio: Headcount scaling factor (total_active / raw_count).
-            For most classes: class_total / class_raw_count.
-            For ECO/ESO/Judges: shared_total / combined_raw_count.
         start_year: Valuation year.
 
     Returns:
         Long-format DataFrame: entry_year, entry_age, age, yos, count, entry_salary
     """
-    growth_col = _get_salary_growth_col(class_name, constants)
+    # Resolve salary growth column name
+    if "salary_increase" in salary_growth.columns:
+        growth_col = "salary_increase"
+    else:
+        growth_col = _get_salary_growth_col(class_name, constants)
 
     # Build cumulative salary growth: extend to full yos range, then cumprod
     # R extends the table with fill-forward before computing cumprod (benefit model lines 6-9)
@@ -93,12 +102,19 @@ def build_salary_headcount_table(
     lagged = np.insert(sg["salary_increase"].values[:-1], 0, 0.0)
     sg["cumprod_salary_increase"] = np.cumprod(1 + lagged)
 
-    # Pivot salary and headcount to long format
-    sal_long = salary_wide.melt(id_vars="age", var_name="yos", value_name="salary")
-    sal_long["yos"] = sal_long["yos"].astype(float).astype(int)
+    # Accept long or wide format for salary
+    if _is_long_format(salary_wide, "salary"):
+        sal_long = salary_wide[["age", "yos", "salary"]].copy()
+    else:
+        sal_long = salary_wide.melt(id_vars="age", var_name="yos", value_name="salary")
+        sal_long["yos"] = sal_long["yos"].astype(float).astype(int)
 
-    hc_long = headcount_wide.melt(id_vars="age", var_name="yos", value_name="count")
-    hc_long["yos"] = hc_long["yos"].astype(float).astype(int)
+    # Accept long or wide format for headcount
+    if _is_long_format(headcount_wide, "count"):
+        hc_long = headcount_wide[["age", "yos", "count"]].copy()
+    else:
+        hc_long = headcount_wide.melt(id_vars="age", var_name="yos", value_name="count")
+        hc_long["yos"] = hc_long["yos"].astype(float).astype(int)
 
     # Adjust headcount using pre-computed ratio
     hc_long["count"] = hc_long["count"] * adjustment_ratio
@@ -233,7 +249,10 @@ def build_salary_benefit_table(
     ben = constants.benefit
 
     # Salary growth for this class: extend to full yos range, then cumprod
-    growth_col = _get_salary_growth_col(class_name, constants)
+    if "salary_increase" in salary_growth.columns:
+        growth_col = "salary_increase"
+    else:
+        growth_col = _get_salary_growth_col(class_name, constants)
     sg = salary_growth[["yos", growth_col]].copy()
     sg = sg.rename(columns={growth_col: "salary_increase"})
 
