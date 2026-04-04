@@ -936,12 +936,23 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     sep_class = (constants.get_sep_class(class_name) if isinstance(constants, PlanConfig)
                  else SEP_CLASS_MAP.get(class_name, class_name))
 
-    plan_name = constants.plan_name if hasattr(constants, "plan_name") else "frs"
+    # Use generic stage 3 loader if data directory exists, else fall back to legacy
+    _use_stage3 = (isinstance(constants, PlanConfig)
+                   and constants.resolve_data_dir().exists()
+                   and (constants.resolve_data_dir() / "demographics").exists())
 
-    if plan_name == "txtrs":
-        inputs = _load_txtrs_inputs(class_name, baseline_dir, constants)
+    if _use_stage3:
+        from pension_model.core.data_loader import load_plan_data
+        inputs = load_plan_data(class_name, sep_class, constants)
+        # Attach reduction tables to config if provided (TRS early retirement)
+        if "_reduction_tables" in inputs:
+            object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
     else:
-        inputs = _load_frs_inputs(class_name, sep_class, baseline_dir, constants)
+        plan_name = constants.plan_name if hasattr(constants, "plan_name") else "frs"
+        if plan_name == "txtrs":
+            inputs = _load_txtrs_inputs(class_name, baseline_dir, constants)
+        else:
+            inputs = _load_frs_inputs(class_name, sep_class, baseline_dir, constants)
 
     # Build benefit tables
     if on_stage:

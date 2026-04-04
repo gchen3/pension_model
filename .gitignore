@@ -53,6 +53,9 @@ env/
 !R_model/R_model_original/Florida FRS inputs.xlsx
 !R_model/R_model_original/Reports/extracted inputs/*.xlsx
 
+# Standardized stage 3 model input data
+!data/**/*.csv
+
 # Config
 !configs/*.csv
 

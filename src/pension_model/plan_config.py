@@ -100,6 +100,21 @@ class PlanConfig:
 
     # --- Modeling behavioral flags ---
 
+    def resolve_data_dir(self) -> Path:
+        """Resolve the stage 3 data directory for this plan.
+
+        Reads data.data_dir from config JSON, resolves relative to project root.
+        Falls back to data/{plan_name}/ if not specified.
+        """
+        data_cfg = self.raw.get("data", {})
+        data_dir_str = data_cfg.get("data_dir", f"data/{self.plan_name}")
+        data_dir = Path(data_dir_str)
+        if not data_dir.is_absolute():
+            # Resolve relative to project root (2 levels up from plan_config.py)
+            project_root = Path(__file__).parents[2]
+            data_dir = project_root / data_dir
+        return data_dir
+
     @property
     def use_earliest_retire(self) -> bool:
         """Whether to use earliest eligible age (incl. early) vs earliest normal."""
