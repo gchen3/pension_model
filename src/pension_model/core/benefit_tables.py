@@ -715,60 +715,68 @@ def build_ann_factor_table(
 def build_benefit_table(
     ann_factor_table: pd.DataFrame,
     salary_benefit_table: pd.DataFrame,
-    class_name: str,
     constants,
-    get_ben_mult: Callable,
-    get_reduce_factor: Callable,
 ) -> pd.DataFrame:
-    """
-    Build benefit table combining annuity factors with salary/benefit data.
+    """Build benefit table combining annuity factors with salary/benefit data.
+
+    Stacked / vectorized: ben_mult and reduce_factor are resolved via
+    resolve_ben_mult_vec / resolve_reduce_factor_vec in one call each.
+    class_name is carried through from ann_factor_table (which already has
+    it as a key column).
 
     When CB is active, also computes cb_benefit and pv_cb_benefit.
 
     Args:
-        ann_factor_table: Output of build_ann_factor_table_compact().
-        salary_benefit_table: Output of build_salary_benefit_table().
-        class_name: Membership class name.
+        ann_factor_table: stacked output of build_ann_factor_table, with
+            class_name column.
+        salary_benefit_table: stacked output of build_salary_benefit_table,
+            with class_name column.
         constants: PlanConfig.
-        get_ben_mult: Callable(class_name, tier, dist_age, yos, dist_year) -> multiplier
-        get_reduce_factor: Callable(class_name, tier, dist_age) -> reduction factor
 
     Returns:
-        DataFrame with db_benefit, ann_factor_term, pvfb_db_at_term_age,
-        and optionally cb_benefit, pv_cb_benefit added.
+        DataFrame with db_benefit, ann_factor_term, pvfb_db_at_term_age, and
+        optionally cb_benefit, pv_cb_benefit added. class_name is preserved.
     """
+    from pension_model.plan_config import (
+        resolve_ben_mult_vec, resolve_reduce_factor_vec,
+    )
+
     cal = constants.benefit.cal_factor
 
     df = ann_factor_table.copy()
     df["term_age"] = df["entry_age"] + df["yos"]
 
-    # Join salary/benefit data for FAS and db_ee_balance (+ CB columns if present)
-    sbt_cols = ["entry_year", "entry_age", "yos", "term_age", "fas", "db_ee_balance"]
+    # Join salary/benefit data for FAS and db_ee_balance (+ CB columns if present).
+    # Join key includes class_name so the merge is stacked-correct.
+    sbt_cols = ["class_name", "entry_year", "entry_age", "yos", "term_age",
+                "fas", "db_ee_balance"]
     has_cb = "cb_balance" in salary_benefit_table.columns
     if has_cb:
         sbt_cols.extend(["cb_balance", "cb_ee_balance", "cb_er_balance",
                          "cb_ee_cont", "cb_er_cont"])
     df = df.merge(
         salary_benefit_table[sbt_cols].drop_duplicates(),
-        on=["entry_year", "entry_age", "yos", "term_age"],
+        on=["class_name", "entry_year", "entry_age", "yos", "term_age"],
         how="left",
     )
 
-    # Compute benefit multiplier and reduction factor
-    tiers = df["tier_at_dist_age"].values
-    dist_ages = df["dist_age"].values.astype(int)
-    yos_vals = df["yos"].values.astype(int)
-    dist_years = df["dist_year"].values.astype(int)
-    n = len(df)
-    ben_mult_arr = np.full(n, np.nan)
-    reduce_arr = np.full(n, np.nan)
-    entry_years = df["entry_year"].values.astype(int)
-    for i in range(n):
-        ben_mult_arr[i] = get_ben_mult(class_name, tiers[i], dist_ages[i], yos_vals[i], dist_years[i])
-        reduce_arr[i] = get_reduce_factor(class_name, tiers[i], dist_ages[i],
-                                          yos_vals[i], entry_years[i])
-    df["ben_mult"] = ben_mult_arr
-    df["reduce_factor"] = reduce_arr
+    # Vectorized benefit multiplier and reduction factor
+    df["ben_mult"] = resolve_ben_mult_vec(
+        constants,
+        df["class_name"].values,
+        df["tier_at_dist_age"].values,
+        df["dist_age"].values.astype(np.int64),
+        df["yos"].values.astype(np.int64),
+        df["dist_year"].values.astype(np.int64),
+    )
+    df["reduce_factor"] = resolve_reduce_factor_vec(
+        constants,
+        df["class_name"].values,
+        df["tier_at_dist_age"].values,
+        df["dist_age"].values.astype(np.int64),
+        df["yos"].values.astype(np.int64),
+        df["entry_year"].values.astype(np.int64),
+    )
 
     # db_benefit = yos * ben_mult * fas * reduce_factor * cal_factor
     df["db_benefit"] = df["yos"] * df["ben_mult"] * df["fas"] * df["reduce_factor"] * cal
@@ -782,15 +790,12 @@ def build_benefit_table(
     # --- CB benefit columns ---
     if has_cb and "surv_icr" in df.columns and "ann_factor_acr" in df.columns:
         # cb_balance_final: project CB balance to retirement via expected ICR
-        # R: CBBalance_final = CBBalance / surv_actual_ICR
         df["cb_balance_final"] = df["cb_balance"] / df["surv_icr"].replace(0, np.nan)
 
         # cb_benefit: annuitize at ACR
-        # R: CB_Benefit = CBBalance_final / AnnuityFactor_ACR
         df["cb_benefit"] = df["cb_balance_final"] / df["ann_factor_acr"].replace(0, np.nan)
 
         # pv_cb_benefit: depends on vesting status
-        # R: is_after_CB_vesting * CB_Benefit * AnnFactorAdj_DR + (1 - is_after_CB_vesting) * CBBalance
         cb_vesting = 5
         cb_cfg = getattr(constants, "cash_balance", None)
         if cb_cfg is not None:
@@ -801,7 +806,6 @@ def build_benefit_table(
             + (1 - is_vested) * df["cb_balance"]
         )
 
-    df["class_name"] = class_name
     return df
 
 

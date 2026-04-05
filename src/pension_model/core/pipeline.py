@@ -173,7 +173,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
             {class_name: expected_icr} if expected_icr is not None else None
         ),
     )
-    bt = build_benefit_table(aft, sbt, class_name, constants, ben_mult_fn, reduce_fn)
+    bt = build_benefit_table(aft, sbt, constants)
     fbt = build_final_benefit_table(bt, use_earliest_retire=constants.use_earliest_retire)
 
     # Step 5: Benefit valuation table (with expected ICR for CB PVFB projection)
