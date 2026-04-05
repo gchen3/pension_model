@@ -731,6 +731,501 @@ def get_sep_type(tier: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Vectorized resolvers
+# ---------------------------------------------------------------------------
+#
+# These operate on numpy arrays and produce bit-identical output to the scalar
+# `get_tier`, `_get_cola`-equivalent, `get_ben_mult`, and `get_reduce_factor`
+# functions above. They are designed to be called once per builder on the full
+# set of rows, replacing per-row `.apply(lambda: get_tier(...))` and Python-loop
+# `get_tier_vectorized` patterns.
+#
+# Semantics must match the scalar versions exactly — the scalar functions are
+# the source of truth, and the unit tests in tests/test_pension_model/
+# test_vectorized_resolvers.py enumerate a grid of inputs and assert equality.
+
+
+def _entry_year_in_tier_vec(entry_year: np.ndarray, tier_def: dict,
+                            new_year: int) -> np.ndarray:
+    """Vectorized version of _entry_year_in_tier."""
+    if tier_def.get("assignment") == "grandfathered_rule":
+        return np.zeros(len(entry_year), dtype=bool)
+
+    lo = tier_def.get("entry_year_min")
+    if tier_def.get("entry_year_min_param") == "new_year":
+        lo = new_year
+
+    hi = tier_def.get("entry_year_max")
+    if tier_def.get("entry_year_max_param") == "new_year":
+        hi = new_year
+
+    mask = np.ones(len(entry_year), dtype=bool)
+    if lo is not None:
+        mask &= entry_year >= lo
+    if hi is not None:
+        mask &= entry_year < hi
+    return mask
+
+
+def _is_grandfathered_vec(entry_year: np.ndarray, entry_age: np.ndarray,
+                          params: dict) -> np.ndarray:
+    """Vectorized version of _is_grandfathered."""
+    cutoff = params["cutoff_year"]
+    n = len(entry_year)
+
+    in_range = entry_year <= cutoff
+    yos_at_cutoff = np.minimum(cutoff - entry_year, 70)
+    age_at_cutoff = entry_age + yos_at_cutoff
+
+    result = np.zeros(n, dtype=bool)
+    for cond in params["conditions"]:
+        # Scalar _is_grandfathered returns True on the FIRST matching condition.
+        # Vectorized: OR the per-condition masks. A row is grandfathered if ANY
+        # condition matches. Equivalent because scalar short-circuits on True.
+        if "min_age_at_cutoff" in cond:
+            result |= in_range & (age_at_cutoff >= cond["min_age_at_cutoff"])
+        if "rule_of_at_cutoff" in cond:
+            result |= in_range & ((age_at_cutoff + yos_at_cutoff)
+                                  >= cond["rule_of_at_cutoff"])
+        if "min_yos_at_cutoff" in cond:
+            result |= in_range & (yos_at_cutoff >= cond["min_yos_at_cutoff"])
+    return result
+
+
+def _matches_condition_vec(cond: dict, age: np.ndarray,
+                           yos: np.ndarray) -> np.ndarray:
+    """Vectorized version of _matches_condition (min_age / min_yos / rule_of)."""
+    n = len(age)
+    mask = np.ones(n, dtype=bool)
+    if "min_age" in cond:
+        mask &= age >= cond["min_age"]
+    if "min_yos" in cond:
+        mask &= yos >= cond["min_yos"]
+    if "rule_of" in cond:
+        mask &= (age + yos) >= cond["rule_of"]
+    return mask
+
+
+def _matches_any_vec(rules: list, age: np.ndarray,
+                     yos: np.ndarray) -> np.ndarray:
+    """Vectorized version of _matches_any (OR over AND rules)."""
+    if not rules:
+        return np.zeros(len(age), dtype=bool)
+    result = np.zeros(len(age), dtype=bool)
+    for rule in rules:
+        result |= _matches_condition_vec(rule, age, yos)
+    return result
+
+
+def resolve_tiers_vec(config: PlanConfig,
+                      class_name: np.ndarray,
+                      entry_year: np.ndarray,
+                      age: np.ndarray,
+                      yos: np.ndarray,
+                      entry_age: Optional[np.ndarray] = None) -> np.ndarray:
+    """Vectorized tier resolution — bit-identical to scalar get_tier.
+
+    Args:
+        class_name: object array of class name strings
+        entry_year, age, yos: int arrays
+        entry_age: optional int array; rows where entry_age <= 0 fall back to
+            age - yos (matching scalar default behavior)
+
+    Returns:
+        Object array of tier strings like 'tier_1_norm', 'grandfathered_early'.
+    """
+    entry_year = np.asarray(entry_year, dtype=np.int64)
+    age = np.asarray(age, dtype=np.int64)
+    yos = np.asarray(yos, dtype=np.int64)
+    n = len(entry_year)
+
+    if entry_age is None:
+        ea_arr = age - yos
+    else:
+        ea_arr = np.asarray(entry_age, dtype=np.int64)
+        ea_arr = np.where(ea_arr > 0, ea_arr, age - yos)
+
+    # Map class_name -> group via config._class_to_group
+    group_map = config._class_to_group
+    group = np.array([group_map.get(cn, "default") for cn in class_name],
+                     dtype=object)
+
+    # Locate a grandfathered tier def (if any) and compute its mask once
+    gf_tier_def = None
+    for td in config.tier_defs:
+        if td.get("assignment") == "grandfathered_rule":
+            gf_tier_def = td
+            break
+    if gf_tier_def is not None:
+        gf_mask_global = _is_grandfathered_vec(
+            entry_year, ea_arr, gf_tier_def["grandfathered_params"])
+    else:
+        gf_mask_global = np.zeros(n, dtype=bool)
+
+    # Assign tier_def index to each row — first match wins
+    tier_idx = np.full(n, -1, dtype=np.int32)
+    for i, td in enumerate(config.tier_defs):
+        unassigned = tier_idx == -1
+        if not unassigned.any():
+            break
+        if td.get("assignment") == "grandfathered_rule":
+            mask = gf_mask_global & unassigned
+        else:
+            mask = _entry_year_in_tier_vec(entry_year, td, config.new_year)
+            mask &= unassigned
+            if td.get("not_grandfathered"):
+                mask &= ~gf_mask_global
+        tier_idx[mask] = i
+
+    # Fallback: anything still unassigned gets the last tier def
+    tier_idx[tier_idx == -1] = len(config.tier_defs) - 1
+
+    # Resolve status per (tier_def, group) combination
+    result = np.empty(n, dtype=object)
+    unique_groups = set(group.tolist())
+    for ti, td in enumerate(config.tier_defs):
+        tier_name = td["name"]
+        for grp in unique_groups:
+            combo_mask = (tier_idx == ti) & (group == grp)
+            if not combo_mask.any():
+                continue
+
+            elig = _get_eligibility(td, grp, config.tier_defs)
+
+            if not elig:
+                result[combo_mask] = f"{tier_name}_non_vested"
+                continue
+
+            sub_age = age[combo_mask]
+            sub_yos = yos[combo_mask]
+
+            normal_rules = elig.get("normal", [])
+            early_rules = elig.get("early", [])
+            vesting_yos = elig.get("vesting_yos", 5)
+
+            norm_m = _matches_any_vec(normal_rules, sub_age, sub_yos)
+            early_m = _matches_any_vec(early_rules, sub_age, sub_yos) & ~norm_m
+            vested_m = (sub_yos >= vesting_yos) & ~norm_m & ~early_m
+            nonvested_m = ~(norm_m | early_m | vested_m)
+
+            sub_result = np.empty(combo_mask.sum(), dtype=object)
+            sub_result[norm_m] = f"{tier_name}_norm"
+            sub_result[early_m] = f"{tier_name}_early"
+            sub_result[vested_m] = f"{tier_name}_vested"
+            sub_result[nonvested_m] = f"{tier_name}_non_vested"
+
+            result[combo_mask] = sub_result
+
+    return result
+
+
+def resolve_cola_vec(config: PlanConfig,
+                     tier: np.ndarray,
+                     entry_year: np.ndarray,
+                     yos: np.ndarray) -> np.ndarray:
+    """Vectorized COLA lookup — bit-identical to the _get_cola closure in
+    build_ann_factor_table_compact.
+
+    Matches each row's tier string against tier_def names (substring match,
+    first hit wins) and returns the prorated or flat COLA.
+    """
+    entry_year = np.asarray(entry_year, dtype=np.int64)
+    yos = np.asarray(yos, dtype=np.int64)
+    n = len(tier)
+    cola_cutoff = config.cola_proration_cutoff_year
+
+    result = np.zeros(n, dtype=np.float64)
+    assigned = np.zeros(n, dtype=bool)
+
+    # Use pandas str.contains for vectorized substring match (regex=False)
+    import pandas as pd
+    tier_s = pd.Series(tier)
+
+    for td in config.tier_defs:
+        td_name = td["name"]
+        contains = tier_s.str.contains(td_name, regex=False, na=False).values
+        mask = contains & ~assigned
+        if not mask.any():
+            continue
+
+        cola_key = td.get("cola_key", "tier_1_active")
+        raw_cola = config.cola.get(cola_key, 0.0)
+
+        should_prorate = (
+            cola_key == "tier_1_active"
+            and not config.cola.get("tier_1_active_constant", False)
+            and cola_cutoff is not None
+            and raw_cola > 0
+        )
+
+        if should_prorate:
+            sub_ey = entry_year[mask]
+            sub_yos = yos[mask]
+            yos_b4 = np.minimum(np.maximum(cola_cutoff - sub_ey, 0), sub_yos)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                safe_yos = np.where(sub_yos > 0, sub_yos, 1)
+                prorated = raw_cola * yos_b4 / safe_yos
+            # If yos <= 0, scalar returns raw_cola (skips proration branch)
+            vals = np.where(sub_yos > 0, prorated, raw_cola)
+            result[mask] = vals
+        else:
+            result[mask] = raw_cola
+
+        assigned |= mask
+
+    # Unassigned rows remain 0 (matching scalar fallback)
+    return result
+
+
+def _resolve_ben_mult_rules(class_rules: dict, tier_base: str) -> Optional[dict]:
+    """Scalar-equivalent rules lookup for a given (class, tier_base)."""
+    if "all_tiers" in class_rules:
+        return class_rules["all_tiers"]
+    rules = class_rules.get(tier_base)
+    if rules is None:
+        for key in class_rules:
+            if key.endswith("_same_as") and key.replace("_same_as", "") == tier_base:
+                ref_tier = class_rules[key]
+                rules = class_rules.get(ref_tier)
+                break
+    return rules
+
+
+def _tier_base_vec(tier: np.ndarray) -> np.ndarray:
+    """Vectorized version of the scalar tier_base extraction:
+      tier.split('_')[0] + '_' + tier.split('_')[1]  if '_' in tier else tier.
+    Preserves scalar behavior exactly, including cases like 'grandfathered_early'
+    → 'grandfathered_early' (not 'grandfathered').
+    """
+    result = np.empty(len(tier), dtype=object)
+    for i, t in enumerate(tier):
+        if "_" in t:
+            parts = t.split("_")
+            if len(parts) >= 2:
+                result[i] = parts[0] + "_" + parts[1]
+            else:
+                result[i] = t
+        else:
+            result[i] = t
+    return result
+
+
+def resolve_ben_mult_vec(config: PlanConfig,
+                         class_name: np.ndarray,
+                         tier: np.ndarray,
+                         dist_age: np.ndarray,
+                         yos: np.ndarray,
+                         dist_year: np.ndarray) -> np.ndarray:
+    """Vectorized benefit multiplier — bit-identical to scalar get_ben_mult."""
+    dist_age = np.asarray(dist_age, dtype=np.int64)
+    yos = np.asarray(yos, dtype=np.int64)
+    dist_year = np.asarray(dist_year, dtype=np.int64)
+    n = len(tier)
+
+    result = np.full(n, np.nan, dtype=np.float64)
+    bm_defs = config.benefit_mult_defs
+
+    tier_base_arr = _tier_base_vec(tier)
+
+    # Group rows by (class_name, tier_base) — this is a small set (few dozen
+    # unique combos across FRS classes), so the outer loop is cheap.
+    import pandas as pd
+    keys = pd.Series(list(zip(class_name.tolist(), tier_base_arr.tolist())))
+    for (cn, tb), idx in keys.groupby(keys).groups.items():
+        idx_arr = np.asarray(idx, dtype=np.int64)
+        class_rules = bm_defs.get(cn)
+        if class_rules is None:
+            continue  # leaves NaN
+
+        rules = _resolve_ben_mult_rules(class_rules, tb)
+        if rules is None:
+            continue
+
+        sub_age = dist_age[idx_arr]
+        sub_yos = yos[idx_arr]
+        sub_year = dist_year[idx_arr]
+        sub_tier = tier[idx_arr]
+
+        if "flat" in rules:
+            vals = np.full(len(idx_arr), rules["flat"], dtype=np.float64)
+            if "flat_before_year" in rules:
+                before = rules["flat_before_year"]
+                override_mask = sub_year <= before["year"]
+                vals = np.where(override_mask, before["mult"], vals)
+            result[idx_arr] = vals
+            continue
+
+        if "graded" in rules:
+            # Evaluate graded entries in order — first match wins per row.
+            sub_vals = np.full(len(idx_arr), np.nan, dtype=np.float64)
+            assigned = np.zeros(len(idx_arr), dtype=bool)
+            for entry in rules["graded"]:
+                or_conditions = entry["or"]
+                entry_mask = np.zeros(len(idx_arr), dtype=bool)
+                for cond in or_conditions:
+                    entry_mask |= _matches_condition_vec(cond, sub_age, sub_yos)
+                new_assign = entry_mask & ~assigned
+                if new_assign.any():
+                    sub_vals[new_assign] = entry["mult"]
+                    assigned |= new_assign
+            # Early-retire fallback for unmatched rows whose tier contains "early"
+            if "early_fallback" in rules:
+                early_s = pd.Series(sub_tier).str.contains("early", regex=False,
+                                                           na=False).values
+                fallback_mask = ~assigned & early_s
+                sub_vals[fallback_mask] = rules["early_fallback"]
+            result[idx_arr] = sub_vals
+            continue
+        # Unknown rule shape → leaves NaN
+
+    return result
+
+
+def resolve_reduce_factor_vec(config: PlanConfig,
+                              class_name: np.ndarray,
+                              tier: np.ndarray,
+                              dist_age: np.ndarray,
+                              yos: np.ndarray,
+                              entry_year: np.ndarray) -> np.ndarray:
+    """Vectorized early retirement reduction — bit-identical to get_reduce_factor.
+
+    Handles both FRS NRA-based (simple linear) and TRS rule-based (linear or
+    table lookup) reduction formulas.
+    """
+    dist_age = np.asarray(dist_age, dtype=np.int64)
+    yos = np.asarray(yos, dtype=np.int64)
+    entry_year = np.asarray(entry_year, dtype=np.int64)
+    n = len(tier)
+
+    result = np.full(n, np.nan, dtype=np.float64)
+
+    import pandas as pd
+    tier_s = pd.Series(tier)
+    has_norm = tier_s.str.contains("norm", regex=False, na=False).values
+    has_early = tier_s.str.contains("early", regex=False, na=False).values
+    has_reduced = tier_s.str.contains("reduced", regex=False, na=False).values
+
+    # Normal retirement → 1.0
+    result[has_norm] = 1.0
+
+    # Neither early nor reduced → NaN (leaves default)
+    needs_reduction = (has_early | has_reduced) & ~has_norm
+    if not needs_reduction.any():
+        return result
+
+    # Extract tier_name via scalar logic: tier.rsplit('_', 1)[0] if '_' in tier else tier
+    # Examples: 'tier_1_early' → 'tier_1', 'grandfathered_early' → 'grandfathered'
+    tier_name_arr = np.empty(n, dtype=object)
+    for i in range(n):
+        if needs_reduction[i]:
+            t = tier[i]
+            tier_name_arr[i] = t.rsplit("_", 1)[0] if "_" in t else t
+
+    # Resolve per (class_name, tier_name) group
+    reduce_tables = getattr(config, "_reduce_tables", None)
+    keys = pd.Series(list(zip(class_name.tolist(), tier_name_arr.tolist())))
+    keys = keys[needs_reduction]
+    for (cn, tname), idx in keys.groupby(keys).groups.items():
+        idx_arr = np.asarray(idx, dtype=np.int64)
+        if tname is None:
+            continue
+
+        # Find tier def + follow early_retire_reduction_same_as chain
+        tier_def = None
+        for td in config.tier_defs:
+            if td["name"] == tname:
+                tier_def = td
+                break
+        if tier_def is None:
+            continue
+
+        rd = tier_def
+        seen = set()
+        while "early_retire_reduction_same_as" in rd:
+            ref = rd["early_retire_reduction_same_as"]
+            if ref in seen:
+                break
+            seen.add(ref)
+            rd = _resolve_tier_def(ref, config.tier_defs)
+
+        reduction = rd.get("early_retire_reduction", {})
+        sub_age = dist_age[idx_arr]
+        sub_yos = yos[idx_arr]
+        sub_ey = entry_year[idx_arr]
+
+        # FRS-style NRA-based reduction
+        if "nra" in reduction:
+            nra_map = reduction["nra"]
+            rate = reduction.get("rate_per_year", 0.05)
+            if cn == "special" and "special" in nra_map:
+                nra = nra_map["special"]
+            else:
+                nra = nra_map.get("default", 65)
+            vals = 1.0 - rate * (nra - sub_age)
+            result[idx_arr] = vals
+            continue
+
+        # TRS-style rule-based reduction
+        if "rules" in reduction:
+            sub_vals = np.full(len(idx_arr), np.nan, dtype=np.float64)
+            assigned = np.zeros(len(idx_arr), dtype=bool)
+            for rule in reduction["rules"]:
+                cond = rule.get("condition", {})
+                cmask = _reduce_condition_vec(cond, sub_age, sub_yos, sub_ey,
+                                              tname)
+                cmask &= ~assigned
+                if not cmask.any():
+                    continue
+                formula = rule.get("formula", "linear")
+                if formula == "linear":
+                    rate = rule.get("rate_per_year", 0.05)
+                    nra = rule.get("nra", 65)
+                    vals = np.maximum(0.0, 1.0 - rate * (nra - sub_age[cmask]))
+                    sub_vals[cmask] = vals
+                    assigned |= cmask
+                elif formula == "table":
+                    table_key = rule.get("table_key", "")
+                    # Per-row table lookup (fallback to scalar loop — rare path)
+                    local_idx = np.where(cmask)[0]
+                    for li in local_idx:
+                        if reduce_tables and table_key in reduce_tables:
+                            sub_vals[li] = _lookup_reduce_table(
+                                reduce_tables[table_key], table_key,
+                                int(sub_age[li]), int(sub_yos[li]))
+                        else:
+                            sub_vals[li] = _default_reduce_factor(int(sub_age[li]))
+                    assigned |= cmask
+            result[idx_arr] = sub_vals
+
+    return result
+
+
+def _reduce_condition_vec(cond: dict, dist_age: np.ndarray, yos: np.ndarray,
+                          entry_year: np.ndarray,
+                          tier_name: str) -> np.ndarray:
+    """Vectorized version of _check_reduce_condition."""
+    n = len(dist_age)
+    if not cond:
+        return np.ones(n, dtype=bool)
+    mask = np.ones(n, dtype=bool)
+    if "min_yos" in cond:
+        mask &= yos >= cond["min_yos"]
+    if "min_age" in cond:
+        mask &= dist_age >= cond["min_age"]
+    if "rule_of" in cond:
+        mask &= (dist_age + yos) >= cond["rule_of"]
+    if cond.get("grandfathered") and "grandfathered" not in tier_name:
+        mask &= False
+    if "or" in cond:
+        or_mask = np.zeros(n, dtype=bool)
+        for sub in cond["or"]:
+            or_mask |= _reduce_condition_vec(sub, dist_age, yos, entry_year,
+                                             tier_name)
+        mask &= or_mask
+    return mask
+
+
+# ---------------------------------------------------------------------------
 # Plan design ratio lookup
 # ---------------------------------------------------------------------------
 
