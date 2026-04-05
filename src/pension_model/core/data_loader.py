@@ -118,18 +118,23 @@ def _build_mortality_from_csv(
     base_path = mort_dir / "base_rates.csv"
     imp_path = mort_dir / "improvement_scale.csv"
 
-    # Determine table name from config
-    mort_cfg = constants.raw.get("mortality", {})
-    base_table_label = mort_cfg.get("base_table", "general")
-
-    # Map config label to CSV table name
-    table_name_map = {
-        "pub_2010_teacher_below_median": "teacher_below_median",
-        "pub_2010_teacher": "teacher",
-        "pub_2010_general_headcount": "general",
-        "pub_2010_safety": "safety",
-    }
-    table_name = table_name_map.get(base_table_label, base_table_label)
+    # Determine table name from config: per-class map takes precedence (FRS uses
+    # this: regular=regular, special/admin=safety, etc.). Otherwise fall back to
+    # the plan-wide mortality.base_table setting (TRS-style single-table plans).
+    base_table_map = constants.raw.get("base_table_map", {})
+    if class_name in base_table_map:
+        table_name = base_table_map[class_name]
+    else:
+        mort_cfg = constants.raw.get("mortality", {})
+        base_table_label = mort_cfg.get("base_table", "general")
+        # Map verbose config labels to CSV table names (TRS uses these)
+        table_name_map = {
+            "pub_2010_teacher_below_median": "teacher_below_median",
+            "pub_2010_teacher": "teacher",
+            "pub_2010_general_headcount": "general",
+            "pub_2010_safety": "safety",
+        }
+        table_name = table_name_map.get(base_table_label, base_table_label)
 
     mp_shift = getattr(constants, "male_mp_forward_shift", 0)
     max_age = constants.ranges.max_age if hasattr(constants.ranges, "max_age") else 120
