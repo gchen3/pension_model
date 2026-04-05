@@ -88,7 +88,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     Returns dict with: salary_headcount, entrant_profile, salary_benefit,
         separation_rate, ann_factor, benefit, final_benefit, benefit_val
     """
-    tier_fn, ben_mult_fn, reduce_fn, sep_type_fn = _make_callables(constants)
+    _, _, _, sep_type_fn = _make_callables(constants)
 
     adj_ratio = compute_adjustment_ratio(class_name, inputs["headcount"], constants, baseline_dir)
     sep_class = constants.get_sep_class(class_name)
@@ -147,7 +147,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
 
     # Step 2: Salary/benefit table (with ICR for CB balance accumulation)
     sbt = build_salary_benefit_table(
-        sh, ep, inputs["salary_growth"], class_name, constants, tier_fn,
+        sh, ep, inputs["salary_growth"], class_name, constants,
         actual_icr_series=actual_icr_series,
     )
 
@@ -160,7 +160,6 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
             inputs["term_rate_avg"], inputs["normal_retire_tier1"],
             inputs["normal_retire_tier2"], inputs["early_retire_tier1"],
             inputs["early_retire_tier2"], sep_ep, sep_class, constants,
-            get_tier_fn=tier_fn,
         )
 
     # Step 4: Annuity factor table → benefit table → final benefit table

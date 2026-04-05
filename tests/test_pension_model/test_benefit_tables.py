@@ -182,11 +182,9 @@ class TestAnnFactorTable:
             build_entrant_profile, build_salary_benefit_table,
         )
         from pension_model.core.mortality_builder import build_compact_mortality_from_excel
-        from pension_model.plan_config import load_frs_config, get_tier as pc_get_tier
+        from pension_model.plan_config import load_frs_config
 
         constants = load_frs_config()
-        cfg = constants
-        get_tier = lambda cn, ey, age, yos, ny=None: pc_get_tier(cfg, cn, ey, age, yos)
         cm = build_compact_mortality_from_excel(
             self.RAW_DIR / "pub-2010-headcount-mort-rates.xlsx",
             self.RAW_DIR / "mortality-improvement-scale-mp-2018-rates.xlsx",
@@ -198,7 +196,7 @@ class TestAnnFactorTable:
         adj = constants.class_data["regular"].total_active_member / hc.iloc[:, 1:].sum().sum()
         sh = build_salary_headcount_table(sal, hc, sg, "regular", adj, 2022)
         ep = build_entrant_profile(sh)
-        sbt = build_salary_benefit_table(sh, ep, sg, "regular", constants, get_tier)
+        sbt = build_salary_benefit_table(sh, ep, sg, "regular", constants)
         # Filter to single entry_year for speed
         sbt_sub = sbt[sbt["entry_year"] == 2000].copy()
         return build_ann_factor_table(
@@ -260,11 +258,9 @@ class TestSalaryBenefitTable:
             build_entrant_profile,
             build_salary_benefit_table,
         )
-        from pension_model.plan_config import load_frs_config, get_tier as pc_get_tier
+        from pension_model.plan_config import load_frs_config
 
         constants = load_frs_config()
-        cfg = constants
-        get_tier = lambda cn, ey, age, yos, ny=None: pc_get_tier(cfg, cn, ey, age, yos)
         salary_growth = pd.read_csv(BASELINE / "salary_growth_table.csv")
         sal = pd.read_csv(BASELINE / f"{class_name}_salary.csv")
         hc = pd.read_csv(BASELINE / f"{class_name}_headcount.csv")
@@ -276,7 +272,7 @@ class TestSalaryBenefitTable:
         ep = build_entrant_profile(sh)
 
         sbt = build_salary_benefit_table(
-            sh, ep, salary_growth, class_name, constants, get_tier,
+            sh, ep, salary_growth, class_name, constants,
         )
 
         # Load R's benefit_data for comparison

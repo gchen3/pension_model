@@ -219,7 +219,6 @@ def build_salary_benefit_table(
     salary_growth: pd.DataFrame,
     class_name: str,
     constants,
-    get_tier: Callable,
     actual_icr_series: "Optional[pd.Series]" = None,
 ) -> pd.DataFrame:
     """
@@ -228,13 +227,14 @@ def build_salary_benefit_table(
     For each (entry_year, entry_age, yos): salary, FAS, db_ee_balance,
     and when cash balance is active: cb_ee_balance, cb_er_balance, cb_balance.
 
+    Tier at term_age is resolved via the vectorized resolve_tiers_vec.
+
     Args:
         salary_headcount: Output of build_salary_headcount_table().
         entrant_profile: Output of build_entrant_profile().
         salary_growth: Salary growth table with yos and class column.
         class_name: Membership class name.
-        constants: Model constants or PlanConfig.
-        get_tier: Callable(class_name, entry_year, age, yos) -> tier string.
+        constants: PlanConfig.
         actual_icr_series: Year→ICR series for CB accumulation (None if no CB).
 
     Returns:
@@ -242,6 +242,8 @@ def build_salary_benefit_table(
                    salary, fas, db_ee_balance, cumprod_salary_increase,
                    [cb_ee_cont, cb_er_cont, cb_ee_balance, cb_er_balance, cb_balance]
     """
+    from pension_model.plan_config import resolve_tiers_vec
+
     r = constants.ranges
     econ = constants.economic
     ben = constants.benefit
@@ -265,23 +267,34 @@ def build_salary_benefit_table(
     lagged = np.insert(sg["salary_increase"].values[:-1], 0, 0.0)
     sg["cumprod_salary_increase"] = np.cumprod(1 + lagged)
 
-    entry_ages = entrant_profile["entry_age"].values
+    entry_ages = np.asarray(entrant_profile["entry_age"].values, dtype=np.int64)
 
-    # Build the expand_grid equivalent
-    rows = []
-    for ey in r.entry_year_range:
-        for ea in entry_ages:
-            for yos in range(0, max_yos + 1):
-                term_age = ea + yos
-                if term_age <= r.max_age:
-                    rows.append((ey, ea, yos, term_age))
+    # Vectorized cross product (entry_year, entry_age, yos) → filter term_age <= max_age
+    ey_axis = np.arange(r.entry_year_range.start, r.entry_year_range.stop,
+                        dtype=np.int64)
+    yos_axis = np.arange(0, max_yos + 1, dtype=np.int64)
+    mg_ey, mg_ea, mg_yos = np.meshgrid(ey_axis, entry_ages, yos_axis, indexing="ij")
+    ey_flat = mg_ey.ravel()
+    ea_flat = mg_ea.ravel()
+    yos_flat = mg_yos.ravel()
+    term_age_flat = ea_flat + yos_flat
+    keep = term_age_flat <= r.max_age
+    ey_flat = ey_flat[keep]
+    ea_flat = ea_flat[keep]
+    yos_flat = yos_flat[keep]
+    term_age_flat = term_age_flat[keep]
 
-    df = pd.DataFrame(rows, columns=["entry_year", "entry_age", "yos", "term_age"])
+    df = pd.DataFrame({
+        "entry_year": ey_flat,
+        "entry_age": ea_flat,
+        "yos": yos_flat,
+        "term_age": term_age_flat,
+    })
 
-    # Add tier at termination age
-    df["tier_at_term_age"] = df.apply(
-        lambda row: get_tier(class_name, row["entry_year"], row["term_age"], row["yos"]),
-        axis=1,
+    # Vectorized tier at term_age (resolve_tiers_vec takes (class, ey, age, yos))
+    cn_arr = np.full(len(df), class_name, dtype=object)
+    df["tier_at_term_age"] = resolve_tiers_vec(
+        constants, cn_arr, ey_flat, term_age_flat, yos_flat,
     )
 
     # Join entrant profile for start_sal
@@ -418,12 +431,13 @@ def build_separation_rate_table(
     entrant_profile: pd.DataFrame,
     class_name: str,
     constants,
-    get_tier_fn=None,
 ) -> pd.DataFrame:
     """
     Build separation rate table combining withdrawal and retirement rates.
 
     Replicates R's get_separation_table() (benefit model lines 522-582).
+    Tier at term_age is resolved via the vectorized resolve_tiers_vec in one
+    pass over the full grid.
 
     Args:
         term_rate_avg: Gender-averaged withdrawal rates (yos × age_group).
@@ -431,12 +445,14 @@ def build_separation_rate_table(
         early_retire_rate_tier1/2: Early retirement rates by age.
         entrant_profile: Entrant profile with entry_age column.
         class_name: Membership class name.
-        constants: Model constants.
+        constants: PlanConfig.
 
     Returns:
         DataFrame: entry_year, entry_age, term_age, yos, term_year,
                    separation_rate, remaining_prob, separation_prob, class_name
     """
+    from pension_model.plan_config import resolve_tiers_vec
+
     r = constants.ranges
 
     # Age group breaks and labels matching R's cut()
@@ -446,18 +462,34 @@ def build_separation_rate_table(
     # Pivot term rates to long format
     term_long = term_rate_avg.melt(id_vars="yos", var_name="age_group", value_name="term_rate")
 
-    entry_ages = entrant_profile["entry_age"].values
+    entry_ages = set(int(ea) for ea in entrant_profile["entry_age"].values)
 
-    # Build expand_grid: (entry_year, term_age, yos)
-    rows = []
-    for ey in r.entry_year_range:
-        for ta in r.age_range:
-            for yos in r.yos_range:
-                ea = ta - yos
-                if ea in entry_ages:
-                    rows.append((ey, ta, yos, ea, ey + yos))
+    # Vectorized expand_grid: (entry_year, term_age, yos) × filter entry_age in set
+    ey_axis = np.arange(r.entry_year_range.start, r.entry_year_range.stop,
+                        dtype=np.int64)
+    ta_axis = np.arange(r.age_range.start, r.age_range.stop, dtype=np.int64)
+    yos_axis = np.arange(r.yos_range.start, r.yos_range.stop, dtype=np.int64)
+    mg_ey, mg_ta, mg_yos = np.meshgrid(ey_axis, ta_axis, yos_axis, indexing="ij")
+    ey_flat = mg_ey.ravel()
+    ta_flat = mg_ta.ravel()
+    yos_flat = mg_yos.ravel()
+    ea_flat = ta_flat - yos_flat
+    # Filter: entry_age must be in the entrant profile
+    valid_ea = np.array(sorted(entry_ages), dtype=np.int64)
+    keep = np.isin(ea_flat, valid_ea)
+    ey_flat = ey_flat[keep]
+    ta_flat = ta_flat[keep]
+    yos_flat = yos_flat[keep]
+    ea_flat = ea_flat[keep]
+    term_year_flat = ey_flat + yos_flat
 
-    df = pd.DataFrame(rows, columns=["entry_year", "term_age", "yos", "entry_age", "term_year"])
+    df = pd.DataFrame({
+        "entry_year": ey_flat,
+        "term_age": ta_flat,
+        "yos": yos_flat,
+        "entry_age": ea_flat,
+        "term_year": term_year_flat,
+    })
 
     # Assign age groups using pd.cut (matching R's cut())
     df["age_group"] = pd.cut(df["term_age"], bins=breaks, labels=labels, right=True)
@@ -468,7 +500,8 @@ def build_separation_rate_table(
     # Join withdrawal rates
     df = df.merge(term_long, on=["yos", "age_group"], how="left")
 
-    # Join retirement rates by term_age
+    # Join retirement rates by term_age — rename the source "age" column
+    # to "_ret_age" to avoid left/right collision on the join.
     for tbl, col_name in [
         (normal_retire_rate_tier1, "normal_retire_rate_tier_1"),
         (normal_retire_rate_tier2, "normal_retire_rate_tier_2"),
@@ -476,14 +509,11 @@ def build_separation_rate_table(
         (early_retire_rate_tier2, "early_retire_rate_tier_2"),
     ]:
         rate_col = [c for c in tbl.columns if c != "age"][0]
-        tbl_renamed = tbl.rename(columns={rate_col: col_name})
-        df = df.merge(tbl_renamed[["age", col_name]], left_on="term_age", right_on="age", how="left")
-        if "age_y" in df.columns:
-            df = df.drop(columns=["age_y"])
-        if "age" in df.columns and "age" != "term_age":
-            # Remove the extra 'age' column from the join
-            if df.columns.tolist().count("age") > 0 and "term_age" in df.columns:
-                df = df.drop(columns=["age"], errors="ignore")
+        sub = tbl[["age", rate_col]].rename(
+            columns={"age": "_ret_age", rate_col: col_name}
+        )
+        df = df.merge(sub, left_on="term_age", right_on="_ret_age", how="left")
+        df = df.drop(columns=["_ret_age"])
 
     # Fill retirement rates within each (entry_year, entry_age) group
     df = df.sort_values(["entry_year", "entry_age", "term_age"])
@@ -492,10 +522,15 @@ def build_separation_rate_table(
         lambda x: x.ffill().bfill()
     )
 
-    # Determine tier and separation rate
-    df["tier_at_term_age"] = get_tier_vectorized(
-        class_name, df["entry_year"].values, df["term_age"].values,
-        df["yos"].values, r.new_year, get_tier_fn=get_tier_fn,
+    # Vectorized tier at term_age
+    n = len(df)
+    cn_arr = np.full(n, class_name, dtype=object)
+    df["tier_at_term_age"] = resolve_tiers_vec(
+        constants,
+        cn_arr,
+        df["entry_year"].values.astype(np.int64),
+        df["term_age"].values.astype(np.int64),
+        df["yos"].values.astype(np.int64),
     )
 
     # Separation rate depends on tier
@@ -515,31 +550,17 @@ def build_separation_rate_table(
     )
 
     # Compute remaining_prob = cumprod(1 - lag(separation_rate, default=0))
-    # Vectorized using groupby shift + cumprod
     df = df.sort_values(["entry_year", "entry_age", "yos"]).reset_index(drop=True)
     grp = df.groupby(["entry_year", "entry_age"])
     sep_lagged = grp["separation_rate"].shift(1, fill_value=0.0)
     df["remaining_prob"] = (1 - sep_lagged).groupby([df["entry_year"], df["entry_age"]]).cumprod()
-    # separation_prob = lag(remaining_prob, default=1) - remaining_prob
     rp_lagged = grp["remaining_prob"].shift(1, fill_value=1.0)
     df["separation_prob"] = rp_lagged - df["remaining_prob"]
 
     df["class_name"] = class_name
     return df[["entry_year", "entry_age", "term_age", "yos", "term_year",
-               "separation_rate", "remaining_prob", "separation_prob", "class_name"]].reset_index(drop=True)
-
-
-def get_tier_vectorized(class_name, entry_year, age, yos, new_year=2024, get_tier_fn=None):
-    """Vectorized get_tier. Uses provided callable or falls back to FRS config."""
-    if get_tier_fn is None:
-        from pension_model.plan_config import load_frs_config, get_tier as _pc_get_tier
-        _cfg = load_frs_config()
-        get_tier_fn = lambda cn, ey, a, y, ny=None: _pc_get_tier(_cfg, cn, ey, a, y)
-    n = len(entry_year)
-    result = np.empty(n, dtype=object)
-    for i in range(n):
-        result[i] = get_tier_fn(class_name, int(entry_year[i]), int(age[i]), int(yos[i]), new_year)
-    return result
+               "separation_rate", "remaining_prob", "separation_prob",
+               "class_name"]].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
