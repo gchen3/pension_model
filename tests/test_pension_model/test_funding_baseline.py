@@ -27,9 +27,9 @@ def funding_results():
     """Run the full pipeline once and cache results for all tests."""
     from pension_model.core.pipeline import run_class_pipeline_e2e
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
-    from pension_model.core.model_constants import frs_constants
+    from pension_model.plan_config import load_frs_config
 
-    constants = frs_constants()
+    constants = load_frs_config()
     liability = {}
     for cn in CLASSES:
         liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants)

@@ -36,12 +36,11 @@ def _fmt_pct(val):
     return f"{val * 100:.1f}%"
 
 
-def run_pipeline(constants, e2e=True):
+def run_pipeline(constants):
     """Run liability + funding pipeline for all groups in a plan."""
-    from pension_model.core.pipeline import run_class_pipeline, run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_class_pipeline_e2e
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
 
-    pipeline_fn = run_class_pipeline_e2e if e2e else run_class_pipeline
     classes = list(constants.classes)
     n = len(classes)
     liability_frames = []
@@ -51,7 +50,7 @@ def run_pipeline(constants, e2e=True):
         pct = int(i / n * 100)
         sys.stdout.write(f"\r    {pct:3d}%")
         sys.stdout.flush()
-        df = pipeline_fn(cn, BASELINE, constants)
+        df = run_class_pipeline_e2e(cn, BASELINE, constants)
         df["plan_name"] = constants.plan_name
         df["class_name"] = cn
         liability_frames.append(df)
@@ -88,7 +87,7 @@ def print_parameters(constants):
     print(f"    Funding policy:         {fn.funding_policy}")
     print(f"    Amortization method:    {fn.amo_method}, {fn.amo_period_new}-year period")
     print(f"    Projection horizon:     {rn.model_period} years ({rn.start_year}-{rn.start_year + rn.model_period})")
-    print(f"    Plan config:            {constants.plan_name if hasattr(constants, 'plan_name') else 'FRS (legacy)'}")
+    print(f"    Plan config:            {constants.plan_name}")
     print(f"    Mortality table:        Pub-2010, MP-2018 improvement scale")
 
 

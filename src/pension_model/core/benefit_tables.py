@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 from typing import Callable
 
-from pension_model.core.model_constants import ModelConstants
-
 # Map class names to salary growth column names (R uses "special_risk" not "special")
 SALARY_GROWTH_COL_MAP = {
     "regular": "salary_increase_regular",
@@ -304,7 +302,7 @@ def build_salary_benefit_table(
     # but can be overridden to start_year when entrant profile salaries are already
     # at start_year level (e.g., TRS where entrant profile is read from Excel).
     max_hist_year = salary_headcount["entry_year"].max()
-    if hasattr(constants, "plan_name") and constants.plan_name != "frs":
+    if constants.plan_name != "frs":
         max_hist_year = max(max_hist_year, constants.ranges.start_year)
     df["salary"] = np.where(
         df["entry_year"] <= max_hist_year,
@@ -313,17 +311,13 @@ def build_salary_benefit_table(
         * (1 + econ.payroll_growth) ** (df["entry_year"] - max_hist_year),
     )
 
-    # FAS period: config-driven from tier definition, fallback to hardcoded
-    if hasattr(constants, "get_fas_years"):
-        tier_bases = df["tier_at_term_age"].str.extract(r"^(\w+)$|^(\w+_\w+)")[1].fillna(
-            df["tier_at_term_age"].str.extract(r"^(\w+_\w+)_")[0]
-        ).fillna(df["tier_at_term_age"])
-        df["fas_period"] = tier_bases.map(
-            lambda t: constants.get_fas_years(t) if pd.notna(t) else constants.fas_years_default
-        ).astype(int)
-    else:
-        # Legacy ModelConstants path: FRS hardcoded
-        df["fas_period"] = np.where(df["tier_at_term_age"].str.contains("tier_1"), 5, 8)
+    # FAS period: config-driven from tier definition
+    tier_bases = df["tier_at_term_age"].str.extract(r"^(\w+)$|^(\w+_\w+)")[1].fillna(
+        df["tier_at_term_age"].str.extract(r"^(\w+_\w+)_")[0]
+    ).fillna(df["tier_at_term_age"])
+    df["fas_period"] = tier_bases.map(
+        lambda t: constants.get_fas_years(t) if pd.notna(t) else constants.fas_years_default
+    ).astype(int)
 
     # Drop rows with NaN salary (entry_age not in profile)
     df = df[df["salary"].notna()].copy()
@@ -423,7 +417,7 @@ def build_separation_rate_table(
     early_retire_rate_tier2: pd.DataFrame,
     entrant_profile: pd.DataFrame,
     class_name: str,
-    constants: ModelConstants,
+    constants,
     get_tier_fn=None,
 ) -> pd.DataFrame:
     """
@@ -552,90 +546,6 @@ def get_tier_vectorized(class_name, entry_year, age, yos, new_year=2024, get_tie
 # 3. Annuity factor table (cumulative survival × discount)
 # ---------------------------------------------------------------------------
 
-def build_ann_factor_table(
-    mort_table: pd.DataFrame,
-    class_name: str,
-    constants: ModelConstants,
-) -> pd.DataFrame:
-    """
-    Build annuity factor table from mortality table.
-
-    For each (entry_year, entry_age, yos) group, compute cumulative
-    mortality-adjusted discount factors and annuity factors.
-
-    Args:
-        mort_table: Mortality table with columns:
-            entry_year, entry_age, dist_year, dist_age, yos, term_year,
-            mort_final, tier_at_dist_age
-        constants: Model constants.
-
-    Returns:
-        DataFrame with additional columns: dr, cola, cum_dr, cum_mort,
-            cum_mort_dr, cum_cola, cum_mort_dr_cola, ann_factor
-    """
-    ben = constants.benefit
-    econ = constants.economic
-
-    df = mort_table.copy()
-
-    # Discount rate depends on tier
-    df["dr"] = np.where(df["tier_at_dist_age"].str.contains("tier_3"), econ.dr_new, econ.dr_current)
-
-    # COLA depends on tier
-    # Tier 1: cola_tier_1_active (prorated by pre-2011 YOS unless constant)
-    # Tier 2: cola_tier_2_active
-    # Tier 3: cola_tier_3_active
-    is_tier1 = df["tier_at_dist_age"].str.contains("tier_1")
-    is_tier2 = df["tier_at_dist_age"].str.contains("tier_2")
-    is_tier3 = df["tier_at_dist_age"].str.contains("tier_3")
-
-    if ben.cola_tier_1_active_constant:
-        cola_tier1 = ben.cola_tier_1_active
-    else:
-        # Prorated: cola * yos_before_cutoff / total_yos
-        # Legacy ModelConstants path — FRS cutoff is always 2011
-        cutoff = 2011
-        yos_b4_cutoff = np.clip(cutoff - df["entry_year"].values, 0, df["yos"].values)
-        cola_tier1 = np.where(
-            df["yos"] > 0,
-            ben.cola_tier_1_active * yos_b4_cutoff / df["yos"],
-            0.0,
-        )
-
-    df["cola"] = np.where(is_tier1, cola_tier1,
-                 np.where(is_tier2, ben.cola_tier_2_active,
-                 np.where(is_tier3, ben.cola_tier_3_active, 0.0)))
-
-    # Compute cumulative factors within each (entry_year, entry_age, yos) group.
-    # Vectorized: sort by group + dist_age, then use shift/cumprod within groups.
-    group_cols = ["entry_year", "entry_age", "yos"]
-    df = df.sort_values(group_cols + ["dist_age"]).reset_index(drop=True)
-
-    # Lagged values: shift within each group, fill first row with 0
-    g = df.groupby(group_cols)
-    dr_lagged = g["dr"].shift(1, fill_value=0.0)
-    mort_lagged = g["mort_final"].shift(1, fill_value=0.0)
-    cola_lagged = g["cola"].shift(1, fill_value=0.0)
-
-    # Cumulative products within groups
-    df["cum_dr"] = (1 + dr_lagged).groupby([df[c] for c in group_cols]).cumprod()
-    df["cum_mort"] = (1 - mort_lagged).groupby([df[c] for c in group_cols]).cumprod()
-    df["cum_cola"] = (1 + cola_lagged).groupby([df[c] for c in group_cols]).cumprod()
-
-    df["cum_mort_dr"] = df["cum_mort"] / df["cum_dr"]
-    df["cum_mort_dr_cola"] = df["cum_mort_dr"] * df["cum_cola"]
-
-    # ann_factor = reverse_cumsum(cum_mort_dr_cola) / cum_mort_dr_cola within each group.
-    # Reverse cumsum trick: total_group_sum - cumsum + current_value = reverse cumsum.
-    grp = df.groupby(group_cols)["cum_mort_dr_cola"]
-    group_total = grp.transform("sum")
-    cum_forward = grp.cumsum()
-    rev_cumsum = group_total - cum_forward + df["cum_mort_dr_cola"]
-    df["ann_factor"] = rev_cumsum / df["cum_mort_dr_cola"]
-    df["class_name"] = class_name
-    return df
-
-
 def build_ann_factor_table_compact(
     salary_benefit_table: pd.DataFrame,
     compact_mortality,
@@ -654,25 +564,16 @@ def build_ann_factor_table_compact(
       - surv_icr: survival discounted by expected ICR
       - ann_factor_acr: annuity factor at the annuity conversion rate (ACR)
 
-    Same output as build_ann_factor_table but without materializing the
-    full mortality cross-product table.
+    Reads COLA, discount rate, and tier assignments from the PlanConfig.
     """
-    from pension_model.plan_config import PlanConfig
-
-    ben = constants.benefit
     econ = constants.economic
     r = constants.ranges
-    # Use config-driven COLA/DR when running through PlanConfig with a tier function.
-    use_config_cola = get_tier_fn is not None and isinstance(constants, PlanConfig)
-    # COLA proration cutoff year: read from config (e.g. FRS=2011), or None if no proration
-    cola_cutoff = (constants.cola_proration_cutoff_year
-                   if isinstance(constants, PlanConfig) else 2011)
+    cola_cutoff = constants.cola_proration_cutoff_year
 
-    # Resolve tier function
+    # Resolve tier function (PlanConfig-driven by default)
     if get_tier_fn is None:
-        from pension_model.plan_config import load_frs_config, get_tier as _pc_get_tier
-        _cfg = load_frs_config()
-        get_tier_fn = lambda cn, ey, da, yos: _pc_get_tier(_cfg, cn, ey, da, yos)
+        from pension_model.plan_config import get_tier as _pc_get_tier
+        get_tier_fn = lambda cn, ey, da, yos: _pc_get_tier(constants, cn, ey, da, yos)
 
     # CB parameters (if active)
     has_cb = expected_icr is not None
@@ -682,34 +583,21 @@ def build_ann_factor_table_compact(
         if cb_cfg is not None:
             acr = cb_cfg.get("annuity_conversion_rate", 0.04)
 
-    # COLA lookup helper
+    # COLA lookup: match tier name to cola_key in the tier definitions
     def _get_cola(tier, ey, yos):
-        if use_config_cola:
-            # Config-driven COLA: match tier name to cola_key
-            for td in constants.tier_defs:
-                if td["name"] in tier:
-                    cola_key = td.get("cola_key", "tier_1_active")
-                    raw_cola = constants.cola.get(cola_key, 0.0)
-                    # COLA proration: tier_1 COLA prorated by pre-cutoff YOS
-                    if (cola_key == "tier_1_active"
-                            and not constants.cola.get("tier_1_active_constant", False)
-                            and cola_cutoff is not None
-                            and raw_cola > 0 and yos > 0):
-                        yos_b4 = min(max(cola_cutoff - ey, 0), yos)
-                        return raw_cola * yos_b4 / yos
-                    return raw_cola
-            return 0.0
-        # Legacy ModelConstants FRS path
-        is_tier1 = "tier_1" in tier
-        is_tier2 = "tier_2" in tier
-        if is_tier1:
-            if ben.cola_tier_1_active_constant:
-                return ben.cola_tier_1_active
-            yos_b4 = min(max(cola_cutoff - ey, 0), yos) if cola_cutoff else 0
-            return ben.cola_tier_1_active * yos_b4 / yos if yos > 0 else 0
-        elif is_tier2:
-            return ben.cola_tier_2_active
-        return ben.cola_tier_3_active
+        for td in constants.tier_defs:
+            if td["name"] in tier:
+                cola_key = td.get("cola_key", "tier_1_active")
+                raw_cola = constants.cola.get(cola_key, 0.0)
+                # COLA proration: tier_1 COLA prorated by pre-cutoff YOS
+                if (cola_key == "tier_1_active"
+                        and not constants.cola.get("tier_1_active_constant", False)
+                        and cola_cutoff is not None
+                        and raw_cola > 0 and yos > 0):
+                    yos_b4 = min(max(cola_cutoff - ey, 0), yos)
+                    return raw_cola * yos_b4 / yos
+                return raw_cola
+        return 0.0
 
     # Get unique cohorts from salary_benefit_table
     sbt = salary_benefit_table[["entry_year", "entry_age", "yos"]].drop_duplicates()
@@ -734,11 +622,8 @@ def build_ann_factor_table_compact(
             is_retiree = "norm" in tier or "early" in tier
             mort = compact_mortality.get_rate(dist_age, dist_year, is_retiree)
 
-            # Discount rate: use dr_new for newest tier, dr_current for others
-            if use_config_cola:
-                dr = econ.dr_current  # TRS uses single rate
-            else:
-                dr = econ.dr_new if "tier_3" in tier else econ.dr_current
+            # Discount rate (all current plans use a single rate)
+            dr = econ.dr_current
 
             cola = _get_cola(tier, ey, yos)
 
@@ -749,7 +634,7 @@ def build_ann_factor_table_compact(
         "term_year", "mort_final", "tier_at_dist_age", "dr", "cola",
     ])
 
-    # Vectorized cumulative products (same as build_ann_factor_table)
+    # Vectorized cumulative products within each cohort
     group_cols = ["entry_year", "entry_age", "yos"]
     df = df.sort_values(group_cols + ["dist_age"]).reset_index(drop=True)
 
@@ -814,10 +699,10 @@ def build_benefit_table(
     When CB is active, also computes cb_benefit and pv_cb_benefit.
 
     Args:
-        ann_factor_table: Output of build_ann_factor_table().
+        ann_factor_table: Output of build_ann_factor_table_compact().
         salary_benefit_table: Output of build_salary_benefit_table().
         class_name: Membership class name.
-        constants: Model constants or PlanConfig.
+        constants: PlanConfig.
         get_ben_mult: Callable(class_name, tier, dist_age, yos, dist_year) -> multiplier
         get_reduce_factor: Callable(class_name, tier, dist_age) -> reduction factor
 

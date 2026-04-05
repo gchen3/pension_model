@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from pension_model.plan_config import (
-    PlanConfig, load_frs_config,
+    load_frs_config,
     get_tier as pc_get_tier,
     get_ben_mult as pc_get_ben_mult,
     get_reduce_factor as pc_get_reduce_factor,
@@ -30,53 +30,20 @@ from pension_model.core.benefit_tables import (
     build_entrant_profile,
     build_salary_benefit_table,
     build_separation_rate_table,
-    build_ann_factor_table,
     build_benefit_table,
     build_final_benefit_table,
     build_benefit_val_table,
 )
 
 
-# R's class mapping for separation rates (R benefit model line 588)
-SEP_CLASS_MAP = {
-    "regular": "regular", "special": "special", "admin": "admin",
-    "eco": "eco", "eso": "regular", "judges": "judges",
-    "senior_management": "senior_management",
-}
-
-
-def load_raw_inputs(class_name: str, baseline_dir: Path) -> dict:
-    """Load all raw input files for a single class."""
-    dt = baseline_dir / "decrement_tables"
-    sep_class = SEP_CLASS_MAP[class_name]
-
-    return {
-        "salary": pd.read_csv(baseline_dir / f"{class_name}_salary.csv"),
-        "headcount": pd.read_csv(baseline_dir / f"{class_name}_headcount.csv"),
-        "salary_growth": pd.read_csv(baseline_dir / "salary_growth_table.csv"),
-        "mortality": pd.read_csv(baseline_dir / f"{class_name}_mortality_rates.csv"),
-        "retiree_distribution": pd.read_csv(baseline_dir / "retiree_distribution.csv"),
-        # Separation rate inputs (may use different class for ESO)
-        "term_rate_avg": pd.read_csv(dt / f"{sep_class}_term_rate_avg.csv"),
-        "normal_retire_tier1": pd.read_csv(dt / f"{sep_class}_normal_retire_rate_tier1.csv"),
-        "normal_retire_tier2": pd.read_csv(dt / f"{sep_class}_normal_retire_rate_tier2.csv"),
-        "early_retire_tier1": pd.read_csv(dt / f"{sep_class}_early_retire_rate_tier1.csv"),
-        "early_retire_tier2": pd.read_csv(dt / f"{sep_class}_early_retire_rate_tier2.csv"),
-        # Workforce projections from R (validated in Phase A)
-        "wf_active": pd.read_csv(baseline_dir / f"{class_name}_wf_active.csv"),
-        "wf_term": pd.read_csv(baseline_dir / f"{class_name}_wf_term.csv"),
-        "wf_retire": pd.read_csv(baseline_dir / f"{class_name}_wf_retire.csv"),
-        "wf_refund": pd.read_csv(baseline_dir / f"{class_name}_wf_refund.csv"),
-        # Current retiree annuity factors
-        "ann_factor_retire": pd.read_csv(baseline_dir / f"{class_name}_ann_factor_retire.csv"),
-    }
-
-
 def _headcount_total(df: pd.DataFrame) -> float:
-    """Sum total active headcount from either long or wide format DataFrame.
+    """Sum total active headcount from either long- or wide-format headcount.
 
-    Stage 3 long format has an explicit 'count' column. Legacy wide format
-    has one column per yos bucket with the age in the first column.
+    Stage 3 data uses long format with an explicit ``count`` column. The
+    cross-class sep-class lookups in ``build_benefit_tables`` still read
+    R-side wide-format CSVs from ``baseline_outputs/`` (one column per yos
+    bucket, age in the first column); migrating those to stage 3 is
+    tracked as a separate data-layout task.
     """
     if "count" in df.columns:
         return float(df["count"].sum())
@@ -87,20 +54,11 @@ def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
                              constants, baseline_dir: Path) -> float:
     """Compute headcount adjustment ratio matching R model.
 
-    Handles both stage 3 long format and legacy wide format headcount inputs.
     For grouped classes (eco/eso/judges in FRS) the denominator is the sum
-    across the group — read from the plan's stage 3 data dir if available,
-    otherwise from baseline_dir.
+    across the group, read from the plan's stage 3 demographics directory.
     """
     if class_name in ("eco", "eso", "judges"):
-        # Prefer stage 3 demographics if available (resolves via PlanConfig)
-        demo_dir = None
-        if hasattr(constants, "resolve_data_dir"):
-            d = constants.resolve_data_dir() / "demographics"
-            if d.exists():
-                demo_dir = d
-        if demo_dir is None:
-            demo_dir = baseline_dir
+        demo_dir = constants.resolve_data_dir() / "demographics"
         combined_raw = sum(
             _headcount_total(pd.read_csv(demo_dir / f"{c}_headcount.csv"))
             for c in ("eco", "eso", "judges")
@@ -110,20 +68,11 @@ def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
 
 
 def _make_callables(constants, class_name=None):
-    """Create tier/benefit callables from constants.
-
-    Always uses config-driven callables. When constants is a ModelConstants
-    (legacy path), loads the FRS PlanConfig for tier/benefit lookups.
-    """
-    if isinstance(constants, PlanConfig):
-        cfg = constants
-    else:
-        # Legacy ModelConstants — use FRS config for tier/benefit rules
-        cfg = load_frs_config()
+    """Create tier/benefit callables from a PlanConfig."""
     return (
-        lambda cn, ey, age, yos, ny=None, **kw: pc_get_tier(cfg, cn, ey, age, yos),
-        lambda cn, tier, da, yos, dy=0: pc_get_ben_mult(cfg, cn, tier, da, yos, dy),
-        lambda cn, tier, da, yos=0, ey=0: pc_get_reduce_factor(cfg, cn, tier, da, yos, ey),
+        lambda cn, ey, age, yos, ny=None, **kw: pc_get_tier(constants, cn, ey, age, yos),
+        lambda cn, tier, da, yos, dy=0: pc_get_ben_mult(constants, cn, tier, da, yos, dy),
+        lambda cn, tier, da, yos=0, ey=0: pc_get_reduce_factor(constants, cn, tier, da, yos, ey),
         pc_get_sep_type,
     )
 
@@ -134,7 +83,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     Build all benefit tables from raw inputs for a single class.
 
     Args:
-        constants: PlanConfig or ModelConstants.
+        constants: PlanConfig.
 
     Returns dict with: salary_headcount, entrant_profile, salary_benefit,
         separation_rate, ann_factor, benefit, final_benefit, benefit_val
@@ -142,8 +91,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     tier_fn, ben_mult_fn, reduce_fn, sep_type_fn = _make_callables(constants)
 
     adj_ratio = compute_adjustment_ratio(class_name, inputs["headcount"], constants, baseline_dir)
-    sep_class = (constants.get_sep_class(class_name) if isinstance(constants, PlanConfig)
-                 else SEP_CLASS_MAP.get(class_name, class_name))
+    sep_class = constants.get_sep_class(class_name)
 
     # --- ICR computation (when cash balance is active) ---
     has_cb = (hasattr(constants, "benefit_types") and "cb" in constants.benefit_types
@@ -216,23 +164,13 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
         )
 
     # Step 4: Annuity factor table → benefit table → final benefit table
-    if "_compact_mortality" in inputs:
-        from pension_model.core.benefit_tables import build_ann_factor_table_compact
-        # Pass config-driven tier function for all PlanConfig plans
-        aft_tier_fn = None
-        if isinstance(constants, PlanConfig):
-            aft_tier_fn = lambda cn, ey, da, yos: tier_fn(cn, ey, da, yos)
-        aft = build_ann_factor_table_compact(sbt, inputs["_compact_mortality"], class_name, constants,
-                                             expected_icr=expected_icr,
-                                             get_tier_fn=aft_tier_fn)
-    else:
-        aft = build_ann_factor_table(inputs["mortality"], class_name, constants)
+    from pension_model.core.benefit_tables import build_ann_factor_table_compact
+    aft_tier_fn = lambda cn, ey, da, yos: tier_fn(cn, ey, da, yos)
+    aft = build_ann_factor_table_compact(sbt, inputs["_compact_mortality"], class_name, constants,
+                                         expected_icr=expected_icr,
+                                         get_tier_fn=aft_tier_fn)
     bt = build_benefit_table(aft, sbt, class_name, constants, ben_mult_fn, reduce_fn)
-    # Config-driven: use_earliest_retire determines whether members retire at
-    # earliest eligible age (incl. early) or earliest normal retirement age.
-    use_earliest = (constants.use_earliest_retire
-                    if isinstance(constants, PlanConfig) else False)
-    fbt = build_final_benefit_table(bt, use_earliest_retire=use_earliest)
+    fbt = build_final_benefit_table(bt, use_earliest_retire=constants.use_earliest_retire)
 
     # Step 5: Benefit valuation table (with expected ICR for CB PVFB projection)
     bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn,
@@ -375,12 +313,8 @@ def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
 
 
 def _get_design_ratios(constants, class_name):
-    """Get design ratios and benefit types from constants (PlanConfig or ModelConstants)."""
-    if hasattr(constants, "get_design_ratios"):
-        return constants.get_design_ratios(class_name), list(constants.benefit_types)
-    is_special = class_name == "special"
-    db_b, db_a, db_n = constants.plan_design.get_ratios(is_special)
-    return {"db": (db_b, db_a, db_n), "dc": (1 - db_b, 1 - db_a, 1 - db_n)}, ["db", "dc"]
+    """Get design ratios and benefit types from a PlanConfig."""
+    return constants.get_design_ratios(class_name), list(constants.benefit_types)
 
 
 def _allocate_term(wf, pop_col, design_ratios, benefit_types, new_year, design_cutoff_year=2018):
@@ -698,8 +632,7 @@ def compute_current_term_vested_liability(
 
     years = list(range(r.start_year, r.start_year + r.model_period + 1))
 
-    tv_method = (constants.term_vested_method
-                 if isinstance(constants, PlanConfig) else "growing_annuity")
+    tv_method = constants.term_vested_method
 
     if tv_method == "bell_curve":
         mid = amo_period / 2
@@ -747,60 +680,6 @@ def compute_current_term_vested_liability(
         "retire_ben_term_est": retire_ben_term_est,
         "aal_term_current_est": aal_term_current,
     })
-
-
-def run_class_pipeline(class_name: str, baseline_dir: Path,
-                       constants=None) -> pd.DataFrame:
-    """
-    Run the full pipeline for a single class: raw inputs → liability output.
-
-    Returns a DataFrame matching R's liability.csv structure.
-    """
-    if constants is None:
-        constants = load_frs_config()
-
-    inputs = load_raw_inputs(class_name, baseline_dir)
-
-    # Build all benefit tables from raw inputs
-    tables = build_benefit_tables(class_name, inputs, constants, baseline_dir)
-
-    # Compute liability components
-    active = compute_active_liability(
-        inputs["wf_active"], tables["benefit_val"], class_name, constants)
-
-    term = compute_term_liability(
-        inputs["wf_term"], tables["benefit_val"], tables["benefit"],
-        class_name, constants)
-
-    refund = compute_refund_liability(
-        inputs["wf_refund"], tables["benefit"], class_name, constants)
-
-    retire = compute_retire_liability(
-        inputs["wf_retire"], tables["benefit"], tables["ann_factor"],
-        class_name, constants)
-
-    # Current retiree liability
-    cd = constants.class_data[class_name]
-    ben_payment = cd.outflow * constants.ben_payment_ratio
-    retire_current = compute_current_retiree_liability(
-        inputs["ann_factor_retire"], inputs["retiree_distribution"],
-        cd.retiree_pop, ben_payment, constants)
-
-    # Current term vested liability
-    term_current = compute_current_term_vested_liability(class_name, constants)
-
-    # Merge all components by year
-    years = pd.DataFrame({"year": range(constants.ranges.start_year,
-                                        constants.ranges.start_year + constants.ranges.model_period + 1)})
-    result = years.merge(active, on="year", how="left")
-    result = result.merge(term, on="year", how="left")
-    result = result.merge(refund, on="year", how="left")
-    result = result.merge(retire, on="year", how="left")
-    result = result.merge(retire_current, on="year", how="left")
-    result = result.merge(term_current, on="year", how="left")
-    result = result.fillna(0)
-    _compute_aal_totals(result)
-    return result
 
 
 def _sum_cols(df, pattern_parts, default=0.0):
@@ -867,117 +746,29 @@ def _compute_aal_totals(result):
     result["total_liability_gain_loss_est"] = 0.0
 
 
-def _load_frs_inputs(class_name: str, sep_class: str,
-                     baseline_dir: Path, constants) -> dict:
-    """Load inputs for FRS from Excel + CSVs."""
-    from pension_model.core.mortality_builder import (
-        build_compact_mortality_from_excel, build_ann_factor_retire_table,
-    )
-    from pension_model.core.decrement_builder import (
-        build_withdrawal_rate_table, build_retirement_rate_tables,
-    )
-
-    raw_dir = baseline_dir.parent / "R_model" / "R_model_frs"
-    frs_inputs = raw_dir / "Florida FRS inputs.xlsx"
-    extracted_inputs = raw_dir / "Reports" / "extracted inputs"
-
-    cm = build_compact_mortality_from_excel(
-        raw_dir / "pub-2010-headcount-mort-rates.xlsx",
-        raw_dir / "mortality-improvement-scale-mp-2018-rates.xlsx",
-        class_name,
-        constants=constants,
-    )
-    afr = build_ann_factor_retire_table(
-        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
-        constants.economic.dr_current, constants.benefit.cola_current_retire,
-    )
-    term_rate_avg = build_withdrawal_rate_table(frs_inputs, sep_class, 70)
-    ret_tables = build_retirement_rate_tables(frs_inputs, extracted_inputs, sep_class)
-
-    return {
-        "salary": pd.read_csv(baseline_dir / f"{class_name}_salary.csv"),
-        "headcount": pd.read_csv(baseline_dir / f"{class_name}_headcount.csv"),
-        "salary_growth": pd.read_csv(baseline_dir / "salary_growth_table.csv"),
-        "retiree_distribution": pd.read_csv(baseline_dir / "retiree_distribution.csv"),
-        "term_rate_avg": term_rate_avg,
-        "normal_retire_tier1": ret_tables["normal_retire_tier1"],
-        "normal_retire_tier2": ret_tables["normal_retire_tier2"],
-        "early_retire_tier1": ret_tables["early_retire_tier1"],
-        "early_retire_tier2": ret_tables["early_retire_tier2"],
-        "ann_factor_retire": afr,
-        "_compact_mortality": cm,
-    }
-
-
-def _load_txtrs_inputs(class_name: str, baseline_dir: Path, constants) -> dict:
-    """Load inputs for TRS from Excel workbook + external mortality files."""
-    from pension_model.core.mortality_builder import (
-        build_compact_mortality_for_plan, build_ann_factor_retire_table,
-    )
-    from pension_model.core.txtrs_loader import build_txtrs_inputs
-
-    raw_dir = baseline_dir.parent / "R_model" / "R_model_txtrs"
-
-    # Get TRS-specific inputs (salary, headcount, separation rates, etc.)
-    inputs = build_txtrs_inputs(raw_dir, constants)
-
-    # Attach reduction tables to config for get_reduce_factor lookups
-    if "_reduction_tables" in inputs:
-        object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
-
-    # Build mortality from config-driven specification
-    cm = build_compact_mortality_for_plan(constants, raw_dir, class_name)
-    afr = build_ann_factor_retire_table(
-        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
-        constants.economic.dr_current, constants.benefit.cola_current_retire,
-    )
-    inputs["ann_factor_retire"] = afr
-    inputs["_compact_mortality"] = cm
-
-    return inputs
-
-
 def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
                            constants=None,
                            on_stage=None,
                            no_new_entrants: bool = False) -> pd.DataFrame:
     """
-    Fully end-to-end pipeline: Stage 3 data -> liability output.
+    End-to-end pipeline for a single class: stage 3 data → liability output.
 
-    Unlike run_class_pipeline() which loads R's pre-computed workforce CSVs,
-    this function computes the workforce projection from scratch using
-    benefit decisions derived from our own benefit tables.
-
-    Still requires from R extraction:
-      - Mortality CSV (will be replaced with raw Excel build later)
-      - Initial active population (wf_active year 0)
-      - Decrement tables, salary/headcount, ann_factor_retire, retiree_distribution
+    Loads plan inputs via the generic stage 3 loader, builds benefit tables,
+    projects the workforce from scratch, and computes the liability result
+    DataFrame (matching the column layout of R's liability.csv).
     """
     from pension_model.core.workforce import project_workforce
     if constants is None:
         constants = load_frs_config()
 
     tier_fn, _, _, sep_type_fn = _make_callables(constants)
-    sep_class = (constants.get_sep_class(class_name) if isinstance(constants, PlanConfig)
-                 else SEP_CLASS_MAP.get(class_name, class_name))
+    sep_class = constants.get_sep_class(class_name)
 
-    # Use generic stage 3 loader if data directory exists, else fall back to legacy
-    _use_stage3 = (isinstance(constants, PlanConfig)
-                   and constants.resolve_data_dir().exists()
-                   and (constants.resolve_data_dir() / "demographics").exists())
-
-    if _use_stage3:
-        from pension_model.core.data_loader import load_plan_data
-        inputs = load_plan_data(class_name, sep_class, constants)
-        # Attach reduction tables to config if provided (TRS early retirement)
-        if "_reduction_tables" in inputs:
-            object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
-    else:
-        plan_name = constants.plan_name if hasattr(constants, "plan_name") else "frs"
-        if plan_name == "txtrs":
-            inputs = _load_txtrs_inputs(class_name, baseline_dir, constants)
-        else:
-            inputs = _load_frs_inputs(class_name, sep_class, baseline_dir, constants)
+    from pension_model.core.data_loader import load_plan_data
+    inputs = load_plan_data(class_name, sep_class, constants)
+    # Attach reduction tables to config if provided (TRS early retirement)
+    if "_reduction_tables" in inputs:
+        object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
 
     # Build benefit tables
     if on_stage:

@@ -16,7 +16,6 @@ import numpy as np
 from typing import Callable
 
 from pension_model.core.compact_mortality import CompactMortality
-from pension_model.core.model_constants import ModelConstants
 
 
 def compute_cohort_salary(
@@ -82,7 +81,7 @@ def compute_cohort_annuity_factors(
     entry_year: int,
     max_yos: int,
     mortality: CompactMortality,
-    constants: ModelConstants,
+    constants,
     get_tier: Callable,
     class_name: str,
 ) -> dict:
@@ -230,7 +229,7 @@ def compute_cohort_benefits(
     ann_factors: dict,
     sep_rates: np.ndarray,
     remaining_prob: np.ndarray,
-    constants: ModelConstants,
+    constants,
     class_name: str,
     get_tier: Callable,
     get_ben_mult: Callable,

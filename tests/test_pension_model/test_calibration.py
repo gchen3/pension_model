@@ -22,13 +22,16 @@ CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_manage
 def calibration_results():
     """Run calibration and return (results, targets, constants)."""
     from pension_model.core.pipeline import run_class_pipeline_e2e
-    from pension_model.core.model_constants import frs_constants, neutral_calibration
+    from pension_model.plan_config import load_frs_config
     from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
         load_targets_from_init_funding, run_calibration,
     )
 
-    constants = neutral_calibration(frs_constants())
+    # Neutral calibration: passing a non-existent calibration path makes
+    # load_plan_config skip calibration loading, so nc_cal defaults to 1.0
+    # and pvfb_term_current to 0.0 for every class.
+    constants = load_frs_config(calibration_path=Path("__no_calibration__"))
     funding_inputs = load_funding_inputs(BASELINE)
     val_norm_costs = {cn: constants.class_data[cn].val_norm_cost for cn in CLASSES}
     targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)

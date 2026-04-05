@@ -36,8 +36,8 @@ class TestSalaryHeadcountTable:
 
     def _get_adjustment_ratio(self, class_name):
         """Compute headcount adjustment ratio matching R model."""
-        from pension_model.core.model_constants import frs_constants
-        c = frs_constants()
+        from pension_model.plan_config import load_frs_config
+        c = load_frs_config()
 
         if class_name in ("eco", "eso", "judges"):
             # R uses a shared ratio: combined_total / combined_raw_count
@@ -124,9 +124,9 @@ class TestSeparationRateTable:
             build_entrant_profile,
             build_separation_rate_table,
         )
-        from pension_model.core.model_constants import frs_constants
+        from pension_model.plan_config import load_frs_config
 
-        constants = frs_constants()
+        constants = load_frs_config()
         sg = pd.read_csv(BASELINE / "salary_growth_table.csv")
 
         # ESO uses Regular's separation table (R line 588)
@@ -183,10 +183,9 @@ class TestAnnFactorTable:
         )
         from pension_model.core.mortality_builder import build_compact_mortality_from_excel
         from pension_model.plan_config import load_frs_config, get_tier as pc_get_tier
-        from pension_model.core.model_constants import frs_constants
 
-        constants = frs_constants()
-        cfg = load_frs_config()
+        constants = load_frs_config()
+        cfg = constants
         get_tier = lambda cn, ey, age, yos, ny=None: pc_get_tier(cfg, cn, ey, age, yos)
         cm = build_compact_mortality_from_excel(
             self.RAW_DIR / "pub-2010-headcount-mort-rates.xlsx",
@@ -258,10 +257,9 @@ class TestSalaryBenefitTable:
             build_salary_benefit_table,
         )
         from pension_model.plan_config import load_frs_config, get_tier as pc_get_tier
-        from pension_model.core.model_constants import frs_constants
 
-        constants = frs_constants()
-        cfg = load_frs_config()
+        constants = load_frs_config()
+        cfg = constants
         get_tier = lambda cn, ey, age, yos, ny=None: pc_get_tier(cfg, cn, ey, age, yos)
         salary_growth = pd.read_csv(BASELINE / "salary_growth_table.csv")
         sal = pd.read_csv(BASELINE / f"{class_name}_salary.csv")

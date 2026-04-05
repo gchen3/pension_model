@@ -47,11 +47,12 @@ def rundown_results():
     """
     from pension_model.core.pipeline import run_class_pipeline_e2e
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
-    from pension_model.core.model_constants import frs_constants
+    from pension_model.plan_config import load_frs_config
 
-    constants = frs_constants()
-    long_ranges = replace(constants.ranges, model_period=RUNDOWN_PERIOD)
-    constants = replace(constants, ranges=long_ranges)
+    constants = load_frs_config()
+    # PlanConfig stores model_period as a top-level field; ranges is a derived
+    # property, so we override the field directly.
+    constants = replace(constants, model_period=RUNDOWN_PERIOD)
 
     liability = {}
     for cn in CLASSES:
