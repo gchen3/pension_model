@@ -88,7 +88,6 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     Returns dict with: salary_headcount, entrant_profile, salary_benefit,
         separation_rate, ann_factor, benefit, final_benefit, benefit_val
     """
-    _, _, _, sep_type_fn = _make_callables(constants)
 
     adj_ratio = compute_adjustment_ratio(class_name, inputs["headcount"], constants, baseline_dir)
     sep_class = constants.get_sep_class(class_name)
@@ -176,7 +175,7 @@ def build_benefit_tables(class_name: str, inputs: dict, constants,
     fbt = build_final_benefit_table(bt, use_earliest_retire=constants.use_earliest_retire)
 
     # Step 5: Benefit valuation table (with expected ICR for CB PVFB projection)
-    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn,
+    bvt = build_benefit_val_table(sbt, fbt, sep, constants,
                                   expected_icr=expected_icr, ann_factor_table=aft)
 
     return {

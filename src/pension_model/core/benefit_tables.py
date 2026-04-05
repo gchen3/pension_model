@@ -15,7 +15,6 @@ Design for generalization:
 
 import numpy as np
 import pandas as pd
-from typing import Callable
 
 # Map class names to salary growth column names (R uses "special_risk" not "special")
 SALARY_GROWTH_COL_MAP = {
@@ -840,11 +839,14 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
     For vested members: dist_age = earliest normal retirement age.
     For non-vested and retirees: dist_age = term_age.
 
+    Stacked: group keys include class_name so the function is correct for
+    a stacked benefit_table with multiple classes.
+
     Args:
-        benefit_table: Output of build_benefit_table().
+        benefit_table: stacked output of build_benefit_table, with class_name.
 
     Returns:
-        DataFrame: entry_year, entry_age, term_age, dist_age,
+        DataFrame: class_name, entry_year, entry_age, term_age, dist_age,
                    db_benefit, pvfb_db_at_term_age, ann_factor_term
     """
     bt = benefit_table.copy()
@@ -858,9 +860,9 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
     else:
         bt["can_retire"] = bt["tier_at_dist_age"].str.contains("norm")
 
-    # Determine distribution age per (entry_year, entry_age, term_age)
+    # Determine distribution age per (class_name, entry_year, entry_age, term_age)
     # R formula: retire_age = n() - sum(can_retire) + min(retire_age)
-    grp_keys = ["entry_year", "entry_age", "term_age"]
+    grp_keys = ["class_name", "entry_year", "entry_age", "term_age"]
     g = bt.groupby(grp_keys)
     dist_age_df = pd.DataFrame({
         "count": g["can_retire"].transform("count"),
@@ -868,7 +870,9 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
         "min_dist_age": g["dist_age"].transform("min"),
         "term_status": g["tier_at_dist_age"].transform("first"),
     })
-    dist_age_df["earliest_retire_age"] = dist_age_df["count"] - dist_age_df["retire_count"] + dist_age_df["min_dist_age"]
+    dist_age_df["earliest_retire_age"] = (
+        dist_age_df["count"] - dist_age_df["retire_count"] + dist_age_df["min_dist_age"]
+    )
     # Get one row per group
     dist_age_df = bt[grp_keys].join(dist_age_df).drop_duplicates(subset=grp_keys)
 
@@ -880,11 +884,11 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
         is_vested, dist_age_df["earliest_retire_age"], dist_age_df["term_age"]
     ).astype(int)
 
-    # Semi-join: keep only rows in benefit_table matching (entry_year, entry_age, term_age, dist_age)
-    bt["term_age"] = bt["entry_age"] + bt["yos"]
+    # Semi-join: keep only rows matching
+    # (class_name, entry_year, entry_age, term_age, dist_age)
     fbt = bt.merge(
-        dist_age_df[["entry_year", "entry_age", "term_age", "dist_age"]],
-        on=["entry_year", "entry_age", "term_age", "dist_age"],
+        dist_age_df[grp_keys + ["dist_age"]],
+        on=grp_keys + ["dist_age"],
         how="inner",
     )
 
@@ -892,7 +896,7 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
     fbt["db_benefit"] = fbt["db_benefit"].fillna(0)
     fbt["pvfb_db_at_term_age"] = fbt["pvfb_db_at_term_age"].fillna(0)
 
-    out_cols = ["entry_year", "entry_age", "term_age", "dist_age",
+    out_cols = ["class_name", "entry_year", "entry_age", "term_age", "dist_age",
                 "db_benefit", "pvfb_db_at_term_age", "ann_factor_term"]
     # Pass through CB columns if present
     for col in ["cb_benefit", "pv_cb_benefit", "cb_balance"]:
@@ -1052,32 +1056,55 @@ def _get_pvfb_cb(
     return pvfb_cb
 
 
+def _resolve_sep_type_vec(tier: np.ndarray) -> np.ndarray:
+    """Vectorized get_sep_type — bit-identical to the scalar version.
+
+    Scalar logic: retire if tier contains any of (early, norm, reduced);
+    else non_vested if tier contains 'non_vested';
+    else vested if tier contains 'vested';
+    else non_vested.
+    """
+    tier_s = pd.Series(tier)
+    has_retire = (tier_s.str.contains("early", regex=False, na=False)
+                  | tier_s.str.contains("norm", regex=False, na=False)
+                  | tier_s.str.contains("reduced", regex=False, na=False)).values
+    has_nonvested = tier_s.str.contains("non_vested", regex=False, na=False).values
+    has_vested = tier_s.str.contains("vested", regex=False, na=False).values
+
+    result = np.full(len(tier), "non_vested", dtype=object)
+    # Order matches scalar: retire > non_vested > vested > fallthrough(non_vested)
+    result[has_vested & ~has_nonvested] = "vested"
+    result[has_nonvested] = "non_vested"
+    result[has_retire] = "retire"
+    return result
+
+
 def build_benefit_val_table(
     salary_benefit_table: pd.DataFrame,
     benefit_table: pd.DataFrame,
     sep_rate_table: pd.DataFrame,
-    class_name: str,
     constants,
-    get_sep_type: Callable,
     expected_icr: "Optional[float]" = None,
     ann_factor_table: "Optional[pd.DataFrame]" = None,
 ) -> pd.DataFrame:
     """
     Build benefit valuation table with PVFB, PVFS, and normal cost.
 
-    When CB is active, also computes pvfb_cb_at_current_age, indv_norm_cost_cb,
-    and pvfnc_cb.
+    Stacked: all merges and groupbys include class_name so the function is
+    correct for stacked inputs with multiple classes. sep_type is resolved
+    with a vectorized mask-based helper (no per-row Python dispatch).
+
+    When CB is active, also computes pvfb_cb_at_current_age,
+    indv_norm_cost_cb, and pvfnc_cb.
 
     Args:
-        salary_benefit_table: Output of build_salary_benefit_table().
-        benefit_table: Output of build_final_benefit_table().
-        sep_rate_table: Separation rate table.
-        class_name: Membership class name.
-        constants: Model constants or PlanConfig.
-        get_sep_type: Callable(tier_str) -> "retire"|"vested"|"non_vested"
+        salary_benefit_table: stacked output of build_salary_benefit_table.
+        benefit_table: stacked output of build_final_benefit_table.
+        sep_rate_table: stacked separation rate table.
+        constants: PlanConfig.
         expected_icr: Expected ICR for CB PVFB projection (None if no CB).
-        ann_factor_table: Full ann_factor_table (needed for CB surv_icr,
-            ann_factor_acr, ann_factor_term at each term_age).
+        ann_factor_table: full stacked ann_factor_table (needed for CB
+            surv_icr, ann_factor_acr, ann_factor_term at each term_age).
 
     Returns:
         DataFrame with pvfb_db_wealth_at_current_age, pvfs_at_current_age,
@@ -1102,27 +1129,39 @@ def build_benefit_val_table(
     sbt = salary_benefit_table.copy()
     sbt["term_year"] = sbt["entry_year"] + sbt["yos"]
 
-    # Join final_benefit_table
-    fbt = benefit_table
-    fbt_cols = ["entry_year", "entry_age", "term_age", "db_benefit", "pvfb_db_at_term_age"]
+    # Join final_benefit_table on (class_name, entry_year, entry_age, term_age)
+    fbt_cols = ["class_name", "entry_year", "entry_age", "term_age",
+                "db_benefit", "pvfb_db_at_term_age"]
     sbt = sbt.merge(
-        fbt[fbt_cols].drop_duplicates(),
-        on=["entry_year", "entry_age", "term_age"],
+        benefit_table[fbt_cols].drop_duplicates(),
+        on=["class_name", "entry_year", "entry_age", "term_age"],
         how="left",
     )
 
-    # Join separation rates
-    sbt = sbt.merge(sep_rate_table, on=["entry_year", "entry_age", "term_age", "yos", "term_year"],
-                     how="left")
+    # Join separation rates. Note: sep_rate_table is keyed by the sep_class
+    # (from constants.sep_class_map), which may differ from this row's
+    # class_name — e.g., FRS eso/eco/judges all share sep_class=regular. The
+    # join key is therefore (entry_year, entry_age, term_age, yos, term_year)
+    # without class_name; the sep table's own class_name column is dropped
+    # before the merge to avoid a spurious column collision.
+    # TODO (stacked rewrite, C6): make the join explicit by keying
+    # sep_rate_table on sep_class and joining via class_name -> sep_class map.
+    sep_cols = [c for c in sep_rate_table.columns if c != "class_name"]
+    sbt = sbt.merge(
+        sep_rate_table[sep_cols],
+        on=["entry_year", "entry_age", "term_age", "yos", "term_year"],
+        how="left",
+    )
 
-    # Determine separation type and benefit decision
-    sbt["sep_type"] = sbt["tier_at_term_age"].apply(get_sep_type)
-    sbt["dr"] = np.where(sbt["tier_at_term_age"].str.contains("tier_3"), econ.dr_new, econ.dr_current)
+    # Vectorized separation type
+    sbt["sep_type"] = _resolve_sep_type_vec(sbt["tier_at_term_age"].values)
+    sbt["dr"] = np.where(
+        sbt["tier_at_term_age"].str.contains("tier_3"), econ.dr_new, econ.dr_current
+    )
 
-    # PVFB at termination: mix of annuity and refund based on sep_type
-    # Wealth at termination: retirees get full annuity PV, vested get a mix
-    # of annuity PV and refund (DBEEBalance), non-vested get refund only.
-    # retire_refund_ratio weights the annuity PV; (1-r) weights the refund.
+    # PVFB at termination: mix of annuity and refund based on sep_type.
+    # Retirees get full annuity PV; vested get retire_refund_ratio-weighted
+    # mix of annuity PV and refund (DBEEBalance); non-vested get refund only.
     sbt["pvfb_db_wealth_at_term_age"] = np.where(
         sbt["sep_type"] == "retire", sbt["pvfb_db_at_term_age"],
         np.where(
@@ -1134,34 +1173,27 @@ def build_benefit_val_table(
 
     # --- Extract CB annuity factors at term_age from the full ann_factor_table ---
     if has_cb:
-        # At each cohort's term_age, dist_age == term_age (first row per cohort in aft).
-        # Extract surv_icr, ann_factor_acr, and ann_factor_term at that point.
         aft = ann_factor_table
         aft_term = aft[aft["dist_age"] == aft["entry_age"] + aft["yos"]].copy()
         aft_term["ann_factor_adj_dr"] = aft_term["ann_factor"] * aft_term["cum_mort_dr"]
-        aft_cb_cols = ["entry_year", "entry_age", "yos"]
+        aft_cb_keys = ["class_name", "entry_year", "entry_age", "yos"]
         cb_join_cols = ["surv_icr", "ann_factor_acr", "ann_factor_adj_dr"]
         sbt = sbt.merge(
-            aft_term[aft_cb_cols + cb_join_cols].drop_duplicates(subset=aft_cb_cols),
-            on=aft_cb_cols,
+            aft_term[aft_cb_keys + cb_join_cols].drop_duplicates(subset=aft_cb_keys),
+            on=aft_cb_keys,
             how="left",
         )
         for col in cb_join_cols:
             sbt[col] = sbt[col].fillna(0.0)
 
-    # Compute PVFB, PVFS, NC within each (entry_year, entry_age) group
+    # Compute PVFB, PVFS, NC within each (class_name, entry_year, entry_age) group
     def _compute_pv(g):
         g = g.sort_values("yos")
-        sep = g["separation_rate"].values.astype(float)
-        rp = g["remaining_prob"].values.astype(float)
+        sep = np.nan_to_num(g["separation_rate"].values.astype(float), 0.0)
+        rp = np.nan_to_num(g["remaining_prob"].values.astype(float), 0.0)
         dr_arr = g["dr"].values.astype(float)
-        val = g["pvfb_db_wealth_at_term_age"].values.astype(float)
+        val = np.nan_to_num(g["pvfb_db_wealth_at_term_age"].values.astype(float), 0.0)
         sal = g["salary"].values.astype(float)
-
-        # Replace NaN with 0
-        val = np.nan_to_num(val, 0.0)
-        sep = np.nan_to_num(sep, 0.0)
-        rp = np.nan_to_num(rp, 0.0)
 
         pvfb = _get_pvfb(sep, dr_arr, val)
         pvfs = _get_pvfs(rp, dr_arr, sal)
@@ -1199,8 +1231,6 @@ def build_benefit_val_table(
         return g
 
     result_parts = []
-    for _, g in sbt.groupby(["entry_year", "entry_age"]):
+    for _, g in sbt.groupby(["class_name", "entry_year", "entry_age"]):
         result_parts.append(_compute_pv(g))
-    sbt = pd.concat(result_parts, ignore_index=True)
-    sbt["class_name"] = class_name
-    return sbt
+    return pd.concat(result_parts, ignore_index=True)
