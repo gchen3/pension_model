@@ -206,12 +206,9 @@ def test_special_still_uses_special_design_ratios(frs_config):
 @pytest.fixture(scope="module")
 def stage3_liability(frs_config):
     """Run the stage 3 liability pipeline once for all FRS classes."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
 
-    results = {}
-    for cn in FRS_CLASSES:
-        results[cn] = run_class_pipeline_e2e(cn, BASELINE, frs_config)
-    return results
+    return run_plan_pipeline(frs_config, BASELINE)
 
 
 @pytest.mark.parametrize("class_name", FRS_CLASSES)

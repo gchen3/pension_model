@@ -38,31 +38,22 @@ def _fmt_pct(val):
 
 def run_pipeline(constants):
     """Run liability + funding pipeline for all groups in a plan."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
 
     classes = list(constants.classes)
-    n = len(classes)
-    liability_frames = []
 
     print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
-    for i, cn in enumerate(classes):
-        pct = int(i / n * 100)
-        sys.stdout.write(f"\r    {pct:3d}%")
-        sys.stdout.flush()
-        df = run_class_pipeline_e2e(cn, BASELINE, constants)
+    liability = run_plan_pipeline(constants, BASELINE, progress=True)
+
+    # Stacked liability: single DataFrame with plan_name + class_name columns
+    liability_frames = []
+    for cn in classes:
+        df = liability[cn].copy()
         df["plan_name"] = constants.plan_name
         df["class_name"] = cn
         liability_frames.append(df)
-    sys.stdout.write(f"\r    100% done\n")
-    sys.stdout.flush()
-
-    # Stacked liability: single DataFrame with plan_name + class_name columns
     liability_stacked = pd.concat(liability_frames, ignore_index=True)
-
-    # Per-class dict for funding model (until funding is also stacked)
-    liability = {cn: liability_stacked[liability_stacked["class_name"] == cn].drop(
-        columns=["plan_name", "class_name"]).reset_index(drop=True) for cn in classes}
 
     print("  Computing funding...")
     funding_inputs = load_funding_inputs(BASELINE)
@@ -186,7 +177,7 @@ def _emit_truth_table(plan_name, liability, funding, constants, output_dir):
 
 def cmd_calibrate(args):
     """Run calibration: compute nc_cal and pvfb_term_current from AV targets."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.plan_config import discover_plans, load_plan_config
     from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
@@ -222,16 +213,8 @@ def cmd_calibrate(args):
     targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)
 
     # Run pipeline with neutral calibration
-    n = len(classes)
-    liability = {}
     print("  Running uncalibrated pipeline...")
-    for i, cn in enumerate(classes):
-        pct = int(i / n * 100)
-        sys.stdout.write(f"\r    {pct:3d}%")
-        sys.stdout.flush()
-        liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants)
-    sys.stdout.write(f"\r    100% done\n")
-    sys.stdout.flush()
+    liability = run_plan_pipeline(constants, BASELINE, progress=True)
 
     # Compute calibration
     results = run_calibration(liability, targets, constants.ranges.start_year)
@@ -283,7 +266,7 @@ def _run_frs(constants, args):
 
 def _run_txtrs(constants, args):
     """Run the Texas TRS liability + funding pipeline and emit outputs."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.core.funding_model import compute_funding_trs
     from pension_model.core.txtrs_loader import load_txtrs_funding_data
 
@@ -293,15 +276,14 @@ def _run_txtrs(constants, args):
 
     t0 = time.time()
 
-    # Run liability pipeline for each class (TRS has only "all")
+    # Run liability pipeline plan-wide (TRS has only "all")
     print("  Building benefit tables, workforce, and liabilities...")
-    liability_results = {}
+    liability_results = run_plan_pipeline(constants, BASELINE)
     liability_frames = []
     for cn in constants.classes:
-        df = run_class_pipeline_e2e(cn, BASELINE, constants)
+        df = liability_results[cn].copy()
         df["plan_name"] = constants.plan_name
         df["class_name"] = cn
-        liability_results[cn] = df
         liability_frames.append(df)
 
     liability_stacked = pd.concat(liability_frames, ignore_index=True)

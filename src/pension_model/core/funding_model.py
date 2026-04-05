@@ -637,7 +637,7 @@ def compute_funding_trs(
     Replicates R's TxTRS_funding_model.R.
 
     Args:
-        liability_result: Output of run_class_pipeline_e2e for class "all".
+        liability_result: Output of run_plan_pipeline for class "all".
         funding_inputs: Output of load_txtrs_funding_data().
         constants: TRS PlanConfig.
 

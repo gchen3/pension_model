@@ -21,7 +21,7 @@ CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_manage
 @pytest.fixture(scope="module")
 def calibration_results():
     """Run calibration and return (results, targets, constants)."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.plan_config import load_frs_config
     from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
@@ -36,9 +36,7 @@ def calibration_results():
     val_norm_costs = {cn: constants.class_data[cn].val_norm_cost for cn in CLASSES}
     targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)
 
-    liability = {}
-    for cn in CLASSES:
-        liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants)
+    liability = run_plan_pipeline(constants, BASELINE)
 
     results = run_calibration(liability, targets, constants.ranges.start_year)
     return results, targets, constants

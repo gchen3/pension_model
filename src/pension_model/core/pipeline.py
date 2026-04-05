@@ -14,12 +14,12 @@ Pipeline:
   7. Aggregate by year → total AAL
 """
 
+import sys
 from pathlib import Path
 import numpy as np
 import pandas as pd
 
 from pension_model.plan_config import (
-    load_frs_config,
     get_tier as pc_get_tier,
     get_ben_mult as pc_get_ben_mult,
     get_reduce_factor as pc_get_reduce_factor,
@@ -40,7 +40,7 @@ def _headcount_total(df: pd.DataFrame) -> float:
     """Sum total active headcount from either long- or wide-format headcount.
 
     Stage 3 data uses long format with an explicit ``count`` column. The
-    cross-class sep-class lookups in ``build_benefit_tables`` still read
+    cross-class sep-class lookups in ``build_plan_benefit_tables`` still read
     R-side wide-format CSVs from ``baseline_outputs/`` (one column per yos
     bucket, age in the first column); migrating those to stage 3 is
     tracked as a separate data-layout task.
@@ -77,114 +77,223 @@ def _make_callables(constants, class_name=None):
     )
 
 
-def build_benefit_tables(class_name: str, inputs: dict, constants,
-                         baseline_dir: Path) -> dict:
-    """
-    Build all benefit tables from raw inputs for a single class.
+def build_plan_benefit_tables(
+    inputs_by_class: dict,
+    constants,
+    baseline_dir: Path,
+) -> dict:
+    """Build every benefit table the plan needs in a single stacked pass.
+
+    Replaces the per-class build_benefit_tables that was called in a 7x
+    loop. All heavy work (ann_factor / benefit / final_benefit /
+    benefit_val) is executed once across all classes via the
+    stacked-capable builders, amortizing fixed pandas overhead and
+    enabling natural cross-class deduplication.
+
+    The per-class prelude (salary_headcount, entrant_profile,
+    salary_benefit, separation_rate) still runs in a loop because each
+    class's inputs are inherently per-class DataFrames, but the
+    individual builders are fast and the outputs are stacked
+    immediately via pd.concat.
+
+    separation_rate is built once per unique sep_class (FRS eco / eso /
+    judges all share regular's sep rates via constants.sep_class_map)
+    and the stacked frame is keyed by sep_class rather than class_name.
 
     Args:
+        inputs_by_class: dict {class_name: inputs dict from load_plan_data}.
         constants: PlanConfig.
+        baseline_dir: Baseline directory (for cross-class sep_class files
+            the FRS combined eco/eso/judges pool reads during
+            compute_adjustment_ratio).
 
-    Returns dict with: salary_headcount, entrant_profile, salary_benefit,
-        separation_rate, ann_factor, benefit, final_benefit, benefit_val
+    Returns:
+        Dict of stacked DataFrames keyed by:
+          salary_headcount, entrant_profile, salary_benefit,
+          separation_rate (keyed by sep_class), ann_factor, benefit,
+          final_benefit, benefit_val.
+        Every frame except separation_rate carries class_name.
     """
-    tier_fn, ben_mult_fn, reduce_fn, sep_type_fn = _make_callables(constants)
+    from pension_model.core.benefit_tables import build_ann_factor_table
 
-    adj_ratio = compute_adjustment_ratio(class_name, inputs["headcount"], constants, baseline_dir)
-    sep_class = constants.get_sep_class(class_name)
+    classes = list(constants.classes)
 
-    # --- ICR computation (when cash balance is active) ---
-    has_cb = (hasattr(constants, "benefit_types") and "cb" in constants.benefit_types
+    # Plan-wide CB flag — if any class in the plan uses CB, we compute ICR.
+    has_cb = (hasattr(constants, "benefit_types")
+              and "cb" in constants.benefit_types
               and getattr(constants, "cash_balance", None) is not None)
-    expected_icr = None
-    actual_icr_series = None
-    if has_cb:
-        from pension_model.core.icr import compute_expected_icr, compute_actual_icr_series
-        cb = constants.cash_balance
-        expected_icr = compute_expected_icr(
-            constants.model_return, cb.get("return_volatility", 0.12),
-            cb["icr_smooth_period"], cb["icr_floor"], cb["icr_cap"],
-            cb["icr_upside_share"],
-        )
-        # Actual ICR: under "assumption" scenario, returns = model_return every year
-        years = range(constants.min_entry_year, constants.max_year + 1)
-        # Use return_scenario from inputs if available, else constant model_return
-        ret_scenario = inputs.get("_return_scenario")
-        if ret_scenario is None:
-            ret_scenario = pd.Series(constants.model_return, index=list(years))
-        actual_icr_series = compute_actual_icr_series(
-            years, constants.start_year, ret_scenario,
-            cb["icr_smooth_period"], cb["icr_floor"], cb["icr_cap"],
-            cb["icr_upside_share"],
+
+    # Reduction tables (TRS early-retire factor lookup) live on the config
+    # object as a side-attached dict. Attach from the first class that
+    # provides them; every class in a given plan shares the same tables.
+    for cn in classes:
+        rt = inputs_by_class[cn].get("_reduction_tables")
+        if rt is not None:
+            object.__setattr__(constants, "_reduce_tables", rt)
+            break
+
+    cm_by_class: dict = {}
+    expected_icr_by_class: dict = {}
+
+    sh_frames: list = []
+    ep_frames: list = []
+    sbt_frames: list = []
+    sep_frames: list = []
+    sep_built_for: set = set()
+
+    for cn in classes:
+        inputs = inputs_by_class[cn]
+        cm_by_class[cn] = inputs["_compact_mortality"]
+        sep_class = constants.get_sep_class(cn)
+
+        adj_ratio = compute_adjustment_ratio(
+            cn, inputs["headcount"], constants, baseline_dir,
         )
 
-    # Step 1: Salary/headcount
-    sh = build_salary_headcount_table(
-        inputs["salary"], inputs["headcount"], inputs["salary_growth"],
-        class_name, adj_ratio, constants.ranges.start_year,
+        # Per-class ICR (only for CB plans) — compute once and pass into
+        # build_salary_benefit_table for this class's CB balance accumulation.
+        actual_icr_series = None
+        if has_cb:
+            from pension_model.core.icr import (
+                compute_expected_icr, compute_actual_icr_series,
+            )
+            cb = constants.cash_balance
+            expected_icr = compute_expected_icr(
+                constants.model_return, cb.get("return_volatility", 0.12),
+                cb["icr_smooth_period"], cb["icr_floor"], cb["icr_cap"],
+                cb["icr_upside_share"],
+            )
+            expected_icr_by_class[cn] = expected_icr
+            years = range(constants.min_entry_year, constants.max_year + 1)
+            ret_scenario = inputs.get("_return_scenario")
+            if ret_scenario is None:
+                ret_scenario = pd.Series(constants.model_return, index=list(years))
+            actual_icr_series = compute_actual_icr_series(
+                years, constants.start_year, ret_scenario,
+                cb["icr_smooth_period"], cb["icr_floor"], cb["icr_cap"],
+                cb["icr_upside_share"],
+            )
+
+        # Step 1: salary/headcount
+        sh = build_salary_headcount_table(
+            inputs["salary"], inputs["headcount"], inputs["salary_growth"],
+            cn, adj_ratio, constants.ranges.start_year, constants=constants,
+        )
+
+        # Entrant profile: from explicit input (TRS Excel sheet) or derived
+        if "_entrant_profile" in inputs:
+            ep = inputs["_entrant_profile"].copy()
+        else:
+            ep = build_entrant_profile(sh)
+        ep_tagged = ep.copy()
+        ep_tagged["class_name"] = cn
+
+        # Step 2: salary/benefit (uses the class's own entrant profile)
+        sbt = build_salary_benefit_table(
+            sh, ep, inputs["salary_growth"], cn, constants,
+            actual_icr_series=actual_icr_series,
+        )
+
+        # Step 3: separation rate — dedupe by sep_class. eco/eso/judges
+        # share "regular"; the first class that asks for a given sep_class
+        # builds it (using its own sep_class's salary/headcount data) and
+        # subsequent classes reference the already-built frame by key.
+        if sep_class not in sep_built_for:
+            if "_separation_rate" in inputs:
+                sep = inputs["_separation_rate"]
+            else:
+                # Build the sep_class's own entrant profile for use here.
+                # When sep_class == cn, reuse the ep we already have.
+                if sep_class == cn:
+                    sep_ep = ep
+                else:
+                    sep_sal = pd.read_csv(baseline_dir / f"{sep_class}_salary.csv")
+                    sep_hc = pd.read_csv(baseline_dir / f"{sep_class}_headcount.csv")
+                    sep_adj = compute_adjustment_ratio(
+                        sep_class, sep_hc, constants, baseline_dir,
+                    )
+                    sep_sh = build_salary_headcount_table(
+                        sep_sal, sep_hc, inputs["salary_growth"],
+                        sep_class, sep_adj, constants.ranges.start_year,
+                        constants=constants,
+                    )
+                    sep_ep = build_entrant_profile(sep_sh)
+                sep = build_separation_rate_table(
+                    inputs["term_rate_avg"], inputs["normal_retire_tier1"],
+                    inputs["normal_retire_tier2"], inputs["early_retire_tier1"],
+                    inputs["early_retire_tier2"], sep_ep, sep_class, constants,
+                )
+            sep_frames.append(sep)
+            sep_built_for.add(sep_class)
+
+        sh_frames.append(sh)
+        ep_frames.append(ep_tagged)
+        sbt_frames.append(sbt)
+
+    salary_headcount = pd.concat(sh_frames, ignore_index=True)
+    entrant_profile = pd.concat(ep_frames, ignore_index=True)
+    salary_benefit = pd.concat(sbt_frames, ignore_index=True)
+    separation_rate = pd.concat(sep_frames, ignore_index=True)
+
+    # Attach sep_class to salary_benefit so build_benefit_val_table can join
+    # sep rates correctly when two classes share a sep_class (FRS eco / eso /
+    # judges all point at 'regular'). sep_rate_table is keyed on sep_class,
+    # not class_name, so without this column the merge could fan out across
+    # sep_classes with colliding (entry_year, entry_age, ...) tuples.
+    sep_class_map = {cn: constants.get_sep_class(cn) for cn in classes}
+    salary_benefit["sep_class"] = salary_benefit["class_name"].map(sep_class_map)
+
+    # Convert class_name and sep_class to pandas Categorical across every
+    # plan-wide frame. class_name is drawn from a fixed small set
+    # (constants.classes) and sep_class from an even smaller set; downstream
+    # pandas groupby / merge / sort operations hash and compare categorical
+    # int codes rather than Python str objects, which is materially faster
+    # on the large stacked frames (the plan-wide benefit_table has hundreds
+    # of thousands of rows). This has no effect on computed values — it's a
+    # pure encoding change.
+    class_cat = pd.CategoricalDtype(categories=list(classes))
+    sep_cat = pd.CategoricalDtype(
+        categories=sorted({sep_class_map[cn] for cn in classes})
+    )
+    salary_headcount["class_name"] = salary_headcount["class_name"].astype(class_cat)
+    entrant_profile["class_name"] = entrant_profile["class_name"].astype(class_cat)
+    salary_benefit["class_name"] = salary_benefit["class_name"].astype(class_cat)
+    salary_benefit["sep_class"] = salary_benefit["sep_class"].astype(sep_cat)
+    separation_rate["class_name"] = separation_rate["class_name"].astype(sep_cat)
+
+    # --- Stacked builders: one call each, spanning every class at once ---
+    ann_factor = build_ann_factor_table(
+        salary_benefit_table=salary_benefit,
+        compact_mortality_by_class=cm_by_class,
         constants=constants,
+        expected_icr_by_class=expected_icr_by_class or None,
     )
-    # Use explicit entrant profile if provided (e.g., TRS reads from Excel sheet),
-    # otherwise derive from salary_headcount (FRS approach).
-    if "_entrant_profile" in inputs:
-        ep = inputs["_entrant_profile"]
-    else:
-        ep = build_entrant_profile(sh)
-
-    # For separation rates, use the sep_class's salary/headcount if different
-    if sep_class != class_name:
-        sep_sal = pd.read_csv(baseline_dir / f"{sep_class}_salary.csv")
-        sep_hc = pd.read_csv(baseline_dir / f"{sep_class}_headcount.csv")
-        sep_adj = compute_adjustment_ratio(sep_class, sep_hc, constants, baseline_dir)
-        sep_sh = build_salary_headcount_table(
-            sep_sal, sep_hc, inputs["salary_growth"],
-            sep_class, sep_adj, constants.ranges.start_year,
-            constants=constants,
-        )
-        sep_ep = build_entrant_profile(sep_sh)
-    else:
-        sep_ep = ep
-
-    # Step 2: Salary/benefit table (with ICR for CB balance accumulation)
-    sbt = build_salary_benefit_table(
-        sh, ep, inputs["salary_growth"], class_name, constants, tier_fn,
-        actual_icr_series=actual_icr_series,
+    benefit = build_benefit_table(ann_factor, salary_benefit, constants)
+    final_benefit = build_final_benefit_table(
+        benefit, use_earliest_retire=constants.use_earliest_retire,
     )
 
-    # Step 3: Separation rate table
-    if "_separation_rate" in inputs:
-        # Pre-built separation rate table (e.g., TRS with different decrement structure)
-        sep = inputs["_separation_rate"]
+    # build_benefit_val_table takes a scalar expected_icr. Multi-class CB
+    # is not currently supported (TRS has only one class "all"); when the
+    # plan has exactly one CB class, pass its ICR. For FRS (no CB), None.
+    if expected_icr_by_class:
+        scalar_icr = next(iter(expected_icr_by_class.values()))
     else:
-        sep = build_separation_rate_table(
-            inputs["term_rate_avg"], inputs["normal_retire_tier1"],
-            inputs["normal_retire_tier2"], inputs["early_retire_tier1"],
-            inputs["early_retire_tier2"], sep_ep, sep_class, constants,
-            get_tier_fn=tier_fn,
-        )
-
-    # Step 4: Annuity factor table → benefit table → final benefit table
-    from pension_model.core.benefit_tables import build_ann_factor_table_compact
-    aft_tier_fn = lambda cn, ey, da, yos: tier_fn(cn, ey, da, yos)
-    aft = build_ann_factor_table_compact(sbt, inputs["_compact_mortality"], class_name, constants,
-                                         expected_icr=expected_icr,
-                                         get_tier_fn=aft_tier_fn)
-    bt = build_benefit_table(aft, sbt, class_name, constants, ben_mult_fn, reduce_fn)
-    fbt = build_final_benefit_table(bt, use_earliest_retire=constants.use_earliest_retire)
-
-    # Step 5: Benefit valuation table (with expected ICR for CB PVFB projection)
-    bvt = build_benefit_val_table(sbt, fbt, sep, class_name, constants, sep_type_fn,
-                                  expected_icr=expected_icr, ann_factor_table=aft)
+        scalar_icr = None
+    benefit_val = build_benefit_val_table(
+        salary_benefit, final_benefit, separation_rate, constants,
+        expected_icr=scalar_icr, ann_factor_table=ann_factor,
+    )
 
     return {
-        "salary_headcount": sh,
-        "entrant_profile": ep,
-        "salary_benefit": sbt,
-        "separation_rate": sep,
-        "ann_factor": aft,
-        "benefit": bt,
-        "final_benefit": fbt,
-        "benefit_val": bvt,
+        "salary_headcount": salary_headcount,
+        "entrant_profile": entrant_profile,
+        "salary_benefit": salary_benefit,
+        "separation_rate": separation_rate,
+        "ann_factor": ann_factor,
+        "benefit": benefit,
+        "final_benefit": final_benefit,
+        "benefit_val": benefit_val,
     }
 
 
@@ -746,91 +855,86 @@ def _compute_aal_totals(result):
     result["total_liability_gain_loss_est"] = 0.0
 
 
-def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
-                           constants=None,
-                           on_stage=None,
-                           no_new_entrants: bool = False) -> pd.DataFrame:
-    """
-    End-to-end pipeline for a single class: stage 3 data → liability output.
+def _project_and_aggregate_class(
+    class_name: str,
+    class_tables: dict,
+    class_inputs: dict,
+    constants,
+    *,
+    no_new_entrants: bool = False,
+    on_stage=None,
+) -> pd.DataFrame:
+    """Per-class workforce projection + liability aggregation.
 
-    Loads plan inputs via the generic stage 3 loader, builds benefit tables,
-    projects the workforce from scratch, and computes the liability result
-    DataFrame (matching the column layout of R's liability.csv).
+    Takes pre-built benefit tables (already sliced to this class from the
+    plan-wide stacked frames) plus the class's raw inputs (needed for
+    CompactMortality and current-retiree projection), and returns the
+    class liability DataFrame. Internal helper — callers go through
+    run_plan_pipeline.
     """
     from pension_model.core.workforce import project_workforce
-    if constants is None:
-        constants = load_frs_config()
 
     tier_fn, _, _, sep_type_fn = _make_callables(constants)
-    sep_class = constants.get_sep_class(class_name)
 
-    from pension_model.core.data_loader import load_plan_data
-    inputs = load_plan_data(class_name, sep_class, constants)
-    # Attach reduction tables to config if provided (TRS early retirement)
-    if "_reduction_tables" in inputs:
-        object.__setattr__(constants, "_reduce_tables", inputs["_reduction_tables"])
-
-    # Build benefit tables
-    if on_stage:
-        on_stage("benefit_tables")
-    tables = build_benefit_tables(class_name, inputs, constants, baseline_dir)
-
-    # Derive benefit decisions from our benefit_val + final_benefit
-    bvt = tables["benefit_val"]
-    fbt = tables["final_benefit"]
-    bvt_bd = bvt[["entry_year", "entry_age", "yos", "term_age", "tier_at_term_age"]].copy()
+    bvt = class_tables["benefit_val"]
+    fbt = class_tables["final_benefit"]
+    bvt_bd = bvt[["entry_year", "entry_age", "yos", "term_age",
+                  "tier_at_term_age"]].copy()
     bvt_bd["sep_type"] = bvt_bd["tier_at_term_age"].apply(sep_type_fn)
     bvt_bd["ben_decision"] = bvt_bd["sep_type"].map(
         {"retire": "retire", "vested": "mix", "non_vested": "refund"})
     bvt_bd.loc[bvt_bd["yos"] == 0, "ben_decision"] = np.nan
     ben_decisions = bvt_bd.merge(
         fbt[["entry_year", "entry_age", "term_age", "dist_age"]].drop_duplicates(),
-        on=["entry_year", "entry_age", "term_age"], how="left")
-    ben_decisions["dist_age"] = ben_decisions["dist_age"].fillna(ben_decisions["term_age"]).astype(int)
+        on=["entry_year", "entry_age", "term_age"], how="left",
+    )
+    ben_decisions["dist_age"] = ben_decisions["dist_age"].fillna(
+        ben_decisions["term_age"]).astype(int)
     ben_decisions = ben_decisions[ben_decisions["ben_decision"].notna()]
 
-    # Initial active population from salary_headcount (no R wf_active CSV needed)
-    # Filter to entry ages in the entrant profile (R's workforce model does this)
-    sh = tables["salary_headcount"]
-    valid_entry_ages = set(tables["entrant_profile"]["entry_age"].values)
+    # Initial active population from this class's salary_headcount
+    sh = class_tables["salary_headcount"]
+    valid_entry_ages = set(class_tables["entrant_profile"]["entry_age"].values)
     initial_active = sh[sh["entry_age"].isin(valid_entry_ages)][
         ["entry_age", "age", "count"]].rename(columns={"count": "n_active"}).copy()
     initial_active = initial_active[initial_active["n_active"] > 0]
 
-    # Run workforce projection
     if on_stage:
         on_stage("workforce")
-    cm = inputs["_compact_mortality"]
+    cm = class_inputs["_compact_mortality"]
     wf = project_workforce(
-        initial_active, tables["separation_rate"], ben_decisions, cm,
-        tables["entrant_profile"], class_name,
+        initial_active, class_tables["separation_rate"], ben_decisions, cm,
+        class_tables["entrant_profile"], class_name,
         constants.ranges.start_year, constants.ranges.model_period,
         constants.economic.pop_growth, constants.benefit.retire_refund_ratio,
         no_new_entrants=no_new_entrants,
-        get_tier_fn=tier_fn)
+        get_tier_fn=tier_fn,
+    )
 
-    # Compute liability from projected workforce
     if on_stage:
         on_stage("liability")
     active = compute_active_liability(
-        wf["wf_active"], tables["benefit_val"], class_name, constants)
+        wf["wf_active"], class_tables["benefit_val"], class_name, constants)
     term = compute_term_liability(
-        wf["wf_term"], tables["benefit_val"], tables["benefit"], class_name, constants)
+        wf["wf_term"], class_tables["benefit_val"], class_tables["benefit"],
+        class_name, constants)
     refund = compute_refund_liability(
-        wf["wf_refund"], tables["benefit"], class_name, constants)
+        wf["wf_refund"], class_tables["benefit"], class_name, constants)
     retire = compute_retire_liability(
-        wf["wf_retire"], tables["benefit"], tables["ann_factor"], class_name, constants)
+        wf["wf_retire"], class_tables["benefit"], class_tables["ann_factor"],
+        class_name, constants)
 
     cd = constants.class_data[class_name]
     ben_payment = cd.outflow * constants.ben_payment_ratio
     retire_current = compute_current_retiree_liability(
-        inputs["ann_factor_retire"], inputs["retiree_distribution"],
+        class_inputs["ann_factor_retire"], class_inputs["retiree_distribution"],
         cd.retiree_pop, ben_payment, constants)
     term_current = compute_current_term_vested_liability(class_name, constants)
 
-    # Merge components
-    years = pd.DataFrame({"year": range(constants.ranges.start_year,
-                                        constants.ranges.start_year + constants.ranges.model_period + 1)})
+    years = pd.DataFrame({"year": range(
+        constants.ranges.start_year,
+        constants.ranges.start_year + constants.ranges.model_period + 1,
+    )})
     result = years.merge(active, on="year", how="left")
     result = result.merge(term, on="year", how="left")
     result = result.merge(refund, on="year", how="left")
@@ -840,3 +944,118 @@ def run_class_pipeline_e2e(class_name: str, baseline_dir: Path,
     result = result.fillna(0)
     _compute_aal_totals(result)
     return result
+
+
+def _split_plan_tables_by_class(plan_tables: dict, classes: list,
+                                sep_class_map: dict) -> dict:
+    """Split plan-wide stacked tables into per-class views in one pass each.
+
+    Returns {class_name: {table_name: DataFrame}}.
+
+    Uses dict(tuple(df.groupby("class_name"))) which does a single O(n) pass
+    per frame instead of 7 full-frame boolean-index scans (N classes × M
+    frames = N*M scans otherwise). For separation_rate, the group key is
+    sep_class rather than class_name, so we build a sep_class-keyed dict
+    once and then map each class to its sep_class's slice.
+
+    The class_name column is stripped from the sliced frames; inside the
+    per-class projection step it is redundant (every row has the same
+    value) and it measurably slows downstream .iterrows() calls in
+    project_workforce.
+    """
+    # Build sep_class-keyed slices for separation_rate once
+    sep_df = plan_tables["separation_rate"]
+    sep_by_class = dict(tuple(sep_df.groupby("class_name", sort=False)))
+
+    # Build class_name-keyed slices for every other table once
+    by_table_then_class: dict = {}
+    for name, df in plan_tables.items():
+        if name == "separation_rate":
+            continue
+        if "class_name" in df.columns:
+            groups = dict(tuple(df.groupby("class_name", sort=False)))
+            # Drop the redundant class_name column from each slice
+            by_table_then_class[name] = {
+                cn: g.drop(columns=["class_name"]).reset_index(drop=True)
+                for cn, g in groups.items()
+            }
+        else:
+            by_table_then_class[name] = {cn: df for cn in classes}
+
+    # Assemble per-class dicts
+    result: dict = {}
+    for cn in classes:
+        tables = {name: slices.get(cn) for name, slices in by_table_then_class.items()}
+        sep_slice = sep_by_class.get(sep_class_map[cn])
+        if sep_slice is not None:
+            sep_slice = sep_slice.drop(columns=["class_name"]).reset_index(drop=True)
+        tables["separation_rate"] = sep_slice
+        result[cn] = tables
+    return result
+
+
+def run_plan_pipeline(
+    constants,
+    baseline_dir: Path,
+    *,
+    no_new_entrants: bool = False,
+    on_stage=None,
+    progress: bool = False,
+) -> dict:
+    """End-to-end pipeline for an entire plan: stage 3 data → per-class liability.
+
+    Loads inputs once per class, builds every benefit table in a single
+    plan-wide stacked call via build_plan_benefit_tables, then loops the
+    classes to project workforce and aggregate liabilities (which
+    currently still run per-class because project_workforce uses numpy
+    matrices sized per class).
+
+    Args:
+        constants: PlanConfig.
+        baseline_dir: Baseline data directory.
+        no_new_entrants: Rundown mode — no new hires projected.
+        on_stage: Optional callback(stage_name: str) for progress reporting.
+        progress: If True, print percent-done progress to stdout.
+
+    Returns:
+        Dict {class_name: liability DataFrame} — one entry per class in
+        constants.classes, matching the old run_class_pipeline_e2e output
+        shape per class.
+    """
+    from pension_model.core.data_loader import load_plan_data
+
+    classes = list(constants.classes)
+
+    # Load raw inputs once per class
+    inputs_by_class = {
+        cn: load_plan_data(cn, constants.get_sep_class(cn), constants)
+        for cn in classes
+    }
+
+    if on_stage:
+        on_stage("benefit_tables")
+    plan_tables = build_plan_benefit_tables(inputs_by_class, constants, baseline_dir)
+
+    # Split stacked tables into per-class views once (single groupby pass
+    # per frame) instead of re-scanning inside the per-class loop.
+    sep_class_map = {cn: constants.get_sep_class(cn) for cn in classes}
+    class_tables_by_name = _split_plan_tables_by_class(
+        plan_tables, classes, sep_class_map,
+    )
+
+    liability = {}
+    n = len(classes)
+    for i, cn in enumerate(classes):
+        if progress:
+            pct = int(i / n * 100)
+            sys.stdout.write(f"\r    {pct:3d}%")
+            sys.stdout.flush()
+        liability[cn] = _project_and_aggregate_class(
+            cn, class_tables_by_name[cn], inputs_by_class[cn], constants,
+            no_new_entrants=no_new_entrants, on_stage=on_stage,
+        )
+    if progress:
+        sys.stdout.write(f"\r    100% done\n")
+        sys.stdout.flush()
+
+    return liability

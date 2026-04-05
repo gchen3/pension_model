@@ -10,10 +10,11 @@ Production modules:
 - plan_config: Plan parameters and table-driven tier/benefit rules
 """
 
-from .core import run_class_pipeline_e2e, compute_funding, load_funding_inputs
+from .core import run_plan_pipeline, build_plan_benefit_tables, compute_funding, load_funding_inputs
 
 __all__ = [
-    "run_class_pipeline_e2e",
+    "run_plan_pipeline",
+    "build_plan_benefit_tables",
     "compute_funding",
     "load_funding_inputs",
 ]

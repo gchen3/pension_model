@@ -2,7 +2,7 @@
 Generic stage 3 data loader.
 
 Reads standardized CSV files from data/{plan}/ and returns the inputs dict
-expected by build_benefit_tables() / run_class_pipeline_e2e().
+expected by build_plan_benefit_tables() / run_plan_pipeline().
 
 This replaces plan-specific loaders (_load_frs_inputs, _load_txtrs_inputs)
 with a single code path that works for any plan.

@@ -20,14 +20,12 @@ CLASSES_PLUS_DROP = CLASSES + ["drop"]
 @pytest.fixture(scope="module")
 def model_results():
     """Run full pipeline once and return (liability, funding, constants)."""
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
     from pension_model.plan_config import load_frs_config
 
     constants = load_frs_config()
-    liability = {}
-    for cn in CLASSES:
-        liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants)
+    liability = run_plan_pipeline(constants, BASELINE)
     funding_inputs = load_funding_inputs(BASELINE)
     funding = compute_funding(liability, funding_inputs, constants)
     return liability, funding, constants

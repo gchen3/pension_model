@@ -2,7 +2,7 @@
 TRS (Texas Teacher Retirement System) data loader.
 
 Reads input data from TxTRS_BM_Inputs.xlsx and external mortality files,
-producing the inputs dict expected by build_benefit_tables / run_class_pipeline_e2e.
+producing the inputs dict expected by build_plan_benefit_tables / run_plan_pipeline.
 
 Key differences from FRS:
   - Single class "all" (no per-class CSVs)
@@ -303,7 +303,7 @@ def build_txtrs_inputs(raw_dir: Path, constants: PlanConfig) -> dict:
         constants: Loaded TRS PlanConfig.
 
     Returns:
-        inputs dict compatible with build_benefit_tables / run_class_pipeline_e2e.
+        inputs dict compatible with build_plan_benefit_tables / run_plan_pipeline.
     """
     xlsx_path = raw_dir / "TxTRS_BM_Inputs.xlsx"
 

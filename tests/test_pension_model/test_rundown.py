@@ -45,7 +45,7 @@ def rundown_results():
 
     Returns (liability_dict, funding_dict, constants).
     """
-    from pension_model.core.pipeline import run_class_pipeline_e2e
+    from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.core.funding_model import load_funding_inputs, compute_funding
     from pension_model.plan_config import load_frs_config
 
@@ -54,9 +54,7 @@ def rundown_results():
     # property, so we override the field directly.
     constants = replace(constants, model_period=RUNDOWN_PERIOD)
 
-    liability = {}
-    for cn in CLASSES:
-        liability[cn] = run_class_pipeline_e2e(cn, BASELINE, constants, no_new_entrants=True)
+    liability = run_plan_pipeline(constants, BASELINE, no_new_entrants=True)
 
     funding_inputs = load_funding_inputs(BASELINE)
     funding = compute_funding(liability, funding_inputs, constants)
