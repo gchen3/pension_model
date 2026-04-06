@@ -911,17 +911,34 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
 # 5. Benefit valuation table (PVFB, PVFS, NC)
 # ---------------------------------------------------------------------------
 
-def _npv(rate: float, cashflows: np.ndarray) -> float:
+try:
+    from numba import njit as _njit
+except ImportError:
+    def _njit(func=None, **kwargs):
+        """No-op fallback when numba is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
+
+
+@_njit(cache=True)
+def _npv(rate, cashflows):
     """R's npv(): sum of cashflows[i] / (1+rate)^(i+1) for i=0..n-1."""
-    if len(cashflows) == 0:
+    n = len(cashflows)
+    if n == 0:
         return 0.0
-    disc = (1 + rate) ** np.arange(1, len(cashflows) + 1)
-    return (cashflows / disc).sum()
+    total = 0.0
+    disc = 1.0 + rate
+    factor = disc
+    for i in range(n):
+        total += cashflows[i] / factor
+        factor *= disc
+    return total
 
 
-def _get_pvfb(sep_rate: np.ndarray, dr: np.ndarray, values: np.ndarray) -> np.ndarray:
-    """
-    Present value of future benefits at each yos.
+@_njit(cache=True)
+def _get_pvfb(sep_rate, dr, values):
+    """Present value of future benefits at each yos (Numba-accelerated).
 
     Replicates R's get_pvfb() (utility_functions.R lines 226-238):
       For each i, take sep_rate[i:], compute sep_prob with double lag,
@@ -930,34 +947,31 @@ def _get_pvfb(sep_rate: np.ndarray, dr: np.ndarray, values: np.ndarray) -> np.nd
     n = len(sep_rate)
     pvfb = np.zeros(n)
     for i in range(n):
-        sr = sep_rate[i:]
-        m = len(sr)
-        # sep_prob = cumprod(1 - lag(sr, n=2, default=0)) * lag(sr, default=0)
-        # lag(sr, n=2, default=0): shift right by 2, fill with 0
-        lag2 = np.zeros(m)
-        if m > 2:
-            lag2[2:] = sr[:-2]
-        elif m > 1:
-            pass  # all zeros
-        cum_surv = np.cumprod(1 - lag2)
-
-        # lag(sr, default=0): shift right by 1, fill with 0
-        lag1 = np.zeros(m)
-        if m > 1:
-            lag1[1:] = sr[:-1]
-        sep_prob = cum_surv * lag1
-
-        val = values[i:]
-        val_adjusted = val * sep_prob
-        # npv of val_adjusted[1:] (skip first element)
+        m = n - i
+        # Build sep_prob = cumprod(1 - lag(sr, n=2)) * lag(sr, n=1)
+        # Inline the lag + cumprod + multiply to avoid array allocation
+        cum_surv = 1.0
         interest = dr[i]
-        pvfb[i] = _npv(interest, val_adjusted[1:])
+        disc = 1.0 + interest
+        factor = disc
+        total = 0.0
+        for j in range(1, m):
+            # lag1[j] = sr[j-1] (shift right by 1)
+            lag1_j = sep_rate[i + j - 1]
+            # lag2[j]: shift right by 2 → lag2[j] = sr[j-2] if j>=2, else 0
+            if j >= 2:
+                cum_surv *= (1.0 - sep_rate[i + j - 2])
+            sep_prob_j = cum_surv * lag1_j
+            val_adj = values[i + j] * sep_prob_j
+            total += val_adj / factor
+            factor *= disc
+        pvfb[i] = total
     return pvfb
 
 
-def _get_pvfs(remaining_prob: np.ndarray, dr: np.ndarray, salary: np.ndarray) -> np.ndarray:
-    """
-    Present value of future salary at each yos.
+@_njit(cache=True)
+def _get_pvfs(remaining_prob, dr, salary):
+    """Present value of future salary at each yos (Numba-accelerated).
 
     Replicates R's get_pvfs() (utility_functions.R lines 287-298):
       For each i, normalize remaining_prob[i:] to start at 1.0,
@@ -966,12 +980,17 @@ def _get_pvfs(remaining_prob: np.ndarray, dr: np.ndarray, salary: np.ndarray) ->
     n = len(remaining_prob)
     pvfs = np.zeros(n)
     for i in range(n):
-        rp = remaining_prob[i:]
-        rp_norm = rp / rp[0] if rp[0] > 0 else rp
-        sal = salary[i:]
-        sal_adjusted = sal * rp_norm
+        rp0 = remaining_prob[i]
         interest = dr[i]
-        pvfs[i] = _npv(interest, sal_adjusted)
+        disc = 1.0 + interest
+        factor = disc  # npv discounts starting at (1+r)^1
+        total = 0.0
+        for j in range(n - i):
+            rp_j = remaining_prob[i + j]
+            rp_norm = rp_j / rp0 if rp0 > 0.0 else rp_j
+            total += salary[i + j] * rp_norm / factor
+            factor *= disc
+        pvfs[i] = total
     return pvfs
 
 
