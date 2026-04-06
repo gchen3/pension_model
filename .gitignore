@@ -62,9 +62,9 @@ env/
 # Memory bank
 memory-bank/
 
-# Actuarial calculations (except reference PDF)
-actuarial_calculations/
-!actuarial_calculations/winklevoss_converted.pdf
+# Actuarial calculations — track reference materials, ignore large/scratch files
+actuarial_calculations/convert_doc.py
+actuarial_calculations/Winklevoss - 1993 - Pension mathematics with numerical illustrations.pdf
 
 # Temp/output
 output/
