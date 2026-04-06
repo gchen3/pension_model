@@ -41,8 +41,7 @@ pension-model run txtrs --no-test      # run Texas TRS model
 ```
 
 Plans are auto-discovered from `configs/<plan>/plan_config.json`; adding a
-new plan is just a matter of dropping a config directory (and, for now,
-registering a pipeline executor in `cli._PIPELINE_EXECUTORS`).
+new plan is just a matter of dropping a config directory with plan data.
 
 ### Output
 

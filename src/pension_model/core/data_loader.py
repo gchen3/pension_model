@@ -271,7 +271,7 @@ def _build_trs_style_decrements(
     yos_rates = term_df[term_df["lookup_type"] == "yos"].copy()
     nr_rates = term_df[term_df["lookup_type"] == "years_from_nr"].copy()
 
-    # Build before10 and after10 tables in the format txtrs_loader expects
+    # Build before10 and after10 tables for TRS-style separation rate logic
     before10 = yos_rates[["lookup_value", "term_rate"]].copy()
     before10 = before10.rename(columns={"lookup_value": "yos"})
 
