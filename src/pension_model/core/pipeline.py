@@ -820,7 +820,7 @@ def _project_and_aggregate_class(
     """
     from pension_model.core.workforce import project_workforce
 
-    tier_fn, _, _, sep_type_fn = _make_callables(constants)
+    _, _, _, sep_type_fn = _make_callables(constants)
 
     bvt = class_tables["benefit_val"]
     fbt = class_tables["final_benefit"]
@@ -854,7 +854,7 @@ def _project_and_aggregate_class(
         constants.ranges.start_year, constants.ranges.model_period,
         constants.economic.pop_growth, constants.benefit.retire_refund_ratio,
         no_new_entrants=no_new_entrants,
-        get_tier_fn=tier_fn,
+        constants=constants,
     )
 
     if on_stage:

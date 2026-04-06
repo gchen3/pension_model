@@ -28,7 +28,7 @@ def project_workforce(
     pop_growth: float = 0.0,
     retire_refund_ratio: float = 1.0,
     no_new_entrants: bool = False,
-    get_tier_fn=None,
+    constants=None,
 ) -> dict:
     """
     Project workforce for all years.
@@ -38,14 +38,14 @@ def project_workforce(
         separation_rates: (entry_year, entry_age, term_age, yos, separation_rate).
         benefit_decisions: (entry_year, entry_age, yos, term_age, dist_age, ben_decision)
             from benefit_val_table. ben_decision is "retire", "mix", or "refund".
-        mortality_rates: (entry_year, entry_age, dist_age, dist_year, yos, mort_final, tier_at_dist_age)
-            or a CompactMortality object.
+        mortality_rates: CompactMortality object.
         entrant_profile: (entry_age, start_sal, entrant_dist).
         class_name: Membership class name.
         start_year: Valuation year.
         model_period: Number of projection years.
         pop_growth: Annual population growth (0 for stable).
         retire_refund_ratio: Fraction of vested "mix" who choose retirement (default 1.0).
+        constants: PlanConfig for tier resolution (needed for tier-aware mortality).
 
     Returns:
         Dict with DataFrames: wf_active, wf_term, wf_retire, wf_refund
@@ -59,78 +59,167 @@ def project_workforce(
     max_age = 120
     ages = list(range(min_age, max_age + 1))
     n_ages = len(ages)
-    age_to_idx = {a: i for i, a in enumerate(ages)}
 
     years = list(range(start_year, start_year + model_period + 1))
     n_years = len(years)
 
     # Build separation rate lookup: sep_rates[entry_age_idx, age_idx, year_idx]
+    # Vectorized: compute array indices from DataFrame columns, then assign.
     sep_lookup = np.zeros((n_entry, n_ages, n_years))
-    for _, row in separation_rates.iterrows():
-        ea = int(row["entry_age"])
-        ta = int(row.get("term_age", row.get("age", ea + row.get("yos", 0))))
-        ey = int(row["entry_year"])
-        sr = row["separation_rate"]
-        if ea in ea_to_idx and ta in age_to_idx:
-            # year = entry_year + yos = ey + (ta - ea)
-            yr = ey + (ta - ea)
-            if start_year <= yr <= start_year + model_period:
-                yi = yr - start_year
-                sep_lookup[ea_to_idx[ea], age_to_idx[ta], yi] = sr if not np.isnan(sr) else 0
+    if len(separation_rates) > 0:
+        sr = separation_rates
+        ea_vals = sr["entry_age"].values.astype(int)
+        ta_vals = sr["term_age"].values.astype(int) if "term_age" in sr.columns else (
+            ea_vals + sr["yos"].values.astype(int))
+        ey_vals = sr["entry_year"].values.astype(int)
+        sr_vals = sr["separation_rate"].values.astype(float)
+        yr_vals = ey_vals + (ta_vals - ea_vals)
 
-    # Build benefit decision lookups: refund_prob and retire_prob
-    # refund_prob: probability of refund given termination at (entry_age, term_age, entry_year)
-    # retire_prob: probability of retirement at distribution age
-    # R computes these from ben_decision in benefit_val_table
-    refund_lookup = {}  # (entry_year, entry_age, term_age) -> refund probability
-    retire_lookup = {}  # (entry_year, entry_age, term_age, dist_age) -> retire probability
+        # Map to index arrays; filter to rows within our ranges
+        ea_idx = np.array([ea_to_idx.get(int(v), -1) for v in ea_vals])
+        ta_idx = ta_vals - min_age  # age_to_idx is contiguous from min_age
+        yr_idx = yr_vals - start_year
+
+        valid = ((ea_idx >= 0) & (ta_idx >= 0) & (ta_idx < n_ages)
+                 & (yr_idx >= 0) & (yr_idx < n_years))
+        sr_clean = np.where(np.isnan(sr_vals), 0.0, sr_vals)
+        sep_lookup[ea_idx[valid], ta_idx[valid], yr_idx[valid]] = sr_clean[valid]
+
+    # Build benefit decision lookups as numpy-indexed arrays.
+    # refund_lookup: 3D [entry_age_idx, age_idx, year_idx] -> refund probability
+    # retire_lookup: 4D [entry_age_idx, age_idx, dist_age_idx, year_idx] -> 1.0
+    # Using dicts with tuple keys is the bottleneck-free approach here because
+    # the inner-year loops (steps 6-7) do sparse lookups; a dense 4D array would
+    # be too large. But we build the dicts from vectorized column ops, not iterrows.
+    refund_lookup = {}
+    retire_lookup = {}
 
     if len(benefit_decisions) > 0:
-        for _, row in benefit_decisions.iterrows():
-            ey = int(row["entry_year"])
-            ea = int(row["entry_age"])
-            ta = int(row.get("term_age", ea + row.get("yos", 0)))
-            da = int(row.get("dist_age", ta))
-            bd = row.get("ben_decision", None)
+        bd = benefit_decisions
+        bd_ey = bd["entry_year"].values.astype(int)
+        bd_ea = bd["entry_age"].values.astype(int)
+        bd_ta = bd["term_age"].values.astype(int) if "term_age" in bd.columns else (
+            bd_ea + bd["yos"].values.astype(int))
+        bd_da = bd["dist_age"].values.astype(int) if "dist_age" in bd.columns else bd_ta
+        bd_dec = bd["ben_decision"].values
+        bd_yos = bd["yos"].values.astype(int) if "yos" in bd.columns else (bd_ta - bd_ea)
 
-            if bd == "refund" or (pd.isna(bd) and row.get("yos", 1) == 0):
-                refund_lookup[(ey, ea, ta)] = 1.0
-            elif bd == "mix":
-                refund_lookup[(ey, ea, ta)] = 1 - retire_refund_ratio
-                retire_lookup[(ey, ea, ta, da)] = 1.0
-            elif bd == "retire":
-                retire_lookup[(ey, ea, ta, da)] = 1.0
+        is_refund = (bd_dec == "refund") | ((pd.isna(bd_dec)) & (bd_yos == 0))
+        is_mix = bd_dec == "mix"
+        is_retire = bd_dec == "retire"
+
+        for i in np.where(is_refund)[0]:
+            refund_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]))] = 1.0
+        for i in np.where(is_mix)[0]:
+            refund_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]))] = 1 - retire_refund_ratio
+            retire_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]), int(bd_da[i]))] = 1.0
+        for i in np.where(is_retire)[0]:
+            retire_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]), int(bd_da[i]))] = 1.0
 
     # Transition matrix: shifts ages right by 1
     TM = np.zeros((n_ages, n_ages))
-    for i in range(n_ages - 1):
-        TM[i, i + 1] = 1.0
+    np.fill_diagonal(TM[:-1, 1:], 1.0)
 
     # Initialize active matrix [entry_age_idx, age_idx]
     active = np.zeros((n_entry, n_ages))
-    for _, row in initial_active.iterrows():
-        ea = int(row["entry_age"])
-        age = int(row["age"])
-        if ea in ea_to_idx and age in age_to_idx:
-            active[ea_to_idx[ea], age_to_idx[age]] = row["n_active"]
+    if len(initial_active) > 0:
+        ia_ea = initial_active["entry_age"].values.astype(int)
+        ia_age = initial_active["age"].values.astype(int)
+        ia_n = initial_active["n_active"].values.astype(float)
+        ia_ei = np.array([ea_to_idx.get(int(v), -1) for v in ia_ea])
+        ia_ai = ia_age - min_age
+        valid = (ia_ei >= 0) & (ia_ai >= 0) & (ia_ai < n_ages)
+        active[ia_ei[valid], ia_ai[valid]] = ia_n[valid]
 
     # New entrant distribution
     ne_dist = np.zeros(n_entry)
-    for _, row in entrant_profile.iterrows():
-        ea = int(row["entry_age"])
-        if ea in ea_to_idx:
-            ne_dist[ea_to_idx[ea]] = row["entrant_dist"]
+    if len(entrant_profile) > 0:
+        ep_ea = entrant_profile["entry_age"].values.astype(int)
+        ep_dist = entrant_profile["entrant_dist"].values.astype(float)
+        ep_ei = np.array([ea_to_idx.get(int(v), -1) for v in ep_ea])
+        valid = ep_ei >= 0
+        ne_dist[ep_ei[valid]] = ep_dist[valid]
 
     # Position matrix for new entrants: entry_age maps to age column
     pos_matrix = np.zeros((n_entry, n_ages))
-    for i, ea in enumerate(entry_ages):
-        if ea in age_to_idx:
-            pos_matrix[i, age_to_idx[ea]] = 1.0
+    ea_arr = np.array(entry_ages)
+    ea_ai = ea_arr - min_age
+    valid = (ea_ai >= 0) & (ea_ai < n_ages)
+    pos_matrix[np.arange(n_entry)[valid], ea_ai[valid]] = 1.0
+
+    # --- Pre-build mortality grids for the full projection horizon ---
+    # Extract 2D slices from CompactMortality's internal grids. Indexed as
+    # mort_grid[age_idx, year_idx] where age_idx = age - min_age and
+    # year_idx = year - start_year. Employee and retiree grids are separate.
+    cm = mortality_rates
+    mort_year_offset = cm.min_year
+    mort_age_offset = cm.min_age
+    emp_mort_full = cm._emp_grid  # [age - mort_age_offset, year - mort_year_offset]
+    ret_mort_full = cm._ret_grid
+
+    # Build 2D mortality survival arrays for each projection year:
+    # emp_surv[age_idx] = 1 - emp_mort(age, year-1) for age in ages
+    # Used to age term and retire stocks via elementwise multiply.
+    emp_surv_by_year = np.ones((n_ages, n_years))
+    ret_surv_by_year = np.ones((n_ages, n_years))
+    for t in range(1, n_years):
+        yr = start_year + t - 1  # mortality is applied at year-1
+        yr_idx = yr - mort_year_offset
+        if 0 <= yr_idx < emp_mort_full.shape[1]:
+            a_lo = max(min_age - mort_age_offset, 0)
+            a_hi = min(max_age + 1 - mort_age_offset, emp_mort_full.shape[0])
+            out_lo = a_lo + mort_age_offset - min_age
+            out_hi = a_hi + mort_age_offset - min_age
+            emp_surv_by_year[out_lo:out_hi, t] = 1.0 - emp_mort_full[a_lo:a_hi, yr_idx]
+            ret_surv_by_year[out_lo:out_hi, t] = 1.0 - ret_mort_full[a_lo:a_hi, yr_idx]
+
+    # --- Pre-build refund probability array ---
+    # refund_prob_arr[entry_age_idx, age_idx, year_idx]
+    # For new terms at (year, entry_age, term_age=age), gives refund prob.
+    refund_prob_arr = np.zeros((n_entry, n_ages, n_years))
+    for (ey, ea, ta), rp in refund_lookup.items():
+        ea_i = ea_to_idx.get(ea, -1)
+        ta_i = ta - min_age
+        yr_i = ey + (ta - ea) - start_year
+        if ea_i >= 0 and 0 <= ta_i < n_ages and 0 <= yr_i < n_years:
+            refund_prob_arr[ea_i, ta_i, yr_i] = rp
+
+    # --- Tier-aware mortality helper for term stocks ---
+    # Deferred vested members use employee mortality until they reach a
+    # retirement-eligible tier (norm/early), then switch to retiree mortality.
+    # We batch-resolve tiers per term stock using resolve_tiers_vec.
+    from pension_model.plan_config import resolve_tiers_vec as _resolve_tiers_vec
+
+    ea_arr_int = np.array(entry_ages, dtype=np.int64)
 
     # Storage: term_year -> [entry_age_idx, age_idx] matrix
     term_stocks = {}
-    # Storage: (term_year, retire_year) -> [entry_age_idx, age_idx] matrix
     retire_stocks = {}
+
+    # Helper: record nonzero entries from a 2D matrix
+    ea_grid = np.array(entry_ages)  # [n_entry]
+
+    def _record_matrix(matrix, year_val, extra_cols=()):
+        """Extract nonzero cells from a 2D [n_entry, n_ages] matrix.
+
+        Returns list of row tuples: (entry_age, age, year, *extra_cols, value).
+        """
+        ei_idx, ai_idx = np.nonzero(matrix > 1e-10)
+        if len(ei_idx) == 0:
+            return []
+        vals = matrix[ei_idx, ai_idx]
+        eas = ea_grid[ei_idx]
+        cur_ages = ai_idx + min_age
+        n = len(ei_idx)
+        year_arr = np.full(n, year_val, dtype=np.int64)
+        cols = [eas, cur_ages, year_arr]
+        for ec in extra_cols:
+            if isinstance(ec, (int, np.integer)):
+                cols.append(np.full(n, ec, dtype=np.int64))
+            else:
+                cols.append(ec)
+        cols.append(vals)
+        return list(zip(*[c.tolist() if hasattr(c, 'tolist') else c for c in cols]))
 
     # Collect outputs
     all_active = []
@@ -139,126 +228,125 @@ def project_workforce(
     all_refund = []
 
     # Record year 0
-    for ei, ea in enumerate(entry_ages):
-        for ai, age in enumerate(ages):
-            if active[ei, ai] > 0:
-                all_active.append((ea, age, start_year, active[ei, ai]))
+    all_active.extend(_record_matrix(active, start_year))
 
     # Main projection loop
     for t in range(1, n_years):
         year = start_year + t
-        yi = t  # year index (0-based from start_year)
         prev_yi = t - 1
 
-        new_retire_stocks = {}  # new retirees this year, keyed by (term_year, retire_year)
+        new_retire_stocks = {}
 
-        # 1. active2term = active * separation_rate
+        # 1. active → term via separation rates
         active2term = active * sep_lookup[:, :, prev_yi]
 
         # 2. Deduct exits and age
         active_after = (active - active2term) @ TM
 
-        # 3. New entrants: ne = sum(wf1) * (1+g) - sum(wf2)
+        # 3. New entrants
         pre_total = active.sum()
         post_total = active_after.sum()
         if no_new_entrants:
             n_new = 0
         else:
-            n_new = pre_total * (1 + pop_growth) - post_total
-            n_new = max(n_new, 0)
+            n_new = max(pre_total * (1 + pop_growth) - post_total, 0)
 
         if n_new > 0:
             new_entrants = np.outer(ne_dist * n_new, np.ones(n_ages)) * pos_matrix
             active_after += new_entrants
 
         active = active_after
+        all_active.extend(_record_matrix(active, year))
 
-        # Record active
-        for ei, ea in enumerate(entry_ages):
-            for ai, age in enumerate(ages):
-                if active[ei, ai] > 1e-10:
-                    all_active.append((ea, age, year, active[ei, ai]))
-
-        # 4. Age existing term stocks with mortality, then shift right
-        # R: term2death = wf_term * mort_array; wf_term = (wf_term - term2death) %*% TM
-        # R uses tier-aware mortality: employee below NRA, retiree at/above NRA
+        # 4. Age existing term stocks with tier-aware mortality
+        # For each term stock, batch-resolve tiers for nonzero cells to determine
+        # employee vs retiree mortality, then apply the appropriate survival rate.
         new_term_stocks = {}
+        surv_year = t  # index into emp/ret_surv_by_year
         for ty, ts in term_stocks.items():
-            if hasattr(mortality_rates, 'get_rates_vec'):
-                for ei, ea in enumerate(entry_ages):
-                    for ai, age in enumerate(ages):
-                        if ts[ei, ai] > 1e-10:
-                            # Determine if member has reached retirement-eligible tier
-                            # (which switches to retiree mortality in R's mort_table)
-                            orig_term_age = age - (year - 1 - ty)  # age in prev year's indexing
-                            yos_at_term = orig_term_age - ea
-                            entry_yr = ty - yos_at_term
-                            if get_tier_fn is not None:
-                                tier = get_tier_fn(class_name, entry_yr, age, yos_at_term)
-                            else:
-                                from pension_model.plan_config import load_frs_config, get_tier as _pc_gt
-                                _cfg = load_frs_config()
-                                tier = _pc_gt(_cfg, class_name, entry_yr, age, yos_at_term)
-                            is_ret = "norm" in tier or "early" in tier
-                            mort = mortality_rates.get_rate(age, year - 1, is_retiree=is_ret)
-                            ts[ei, ai] *= (1 - mort)
-            aged = ts @ TM
-            new_term_stocks[ty] = aged
+            nz_ei, nz_ai = np.nonzero(ts > 1e-10)
+            if len(nz_ei) == 0:
+                new_term_stocks[ty] = ts @ TM
+                continue
 
-        # 5. New terms: active2term aged by 1
-        new_terms_aged = active2term @ TM
-        new_term_stocks[year] = new_terms_aged.copy()
+            # Compute tier parameters for nonzero cells
+            nz_age = nz_ai + min_age  # current age (pre-shift)
+            orig_term_age = nz_age - (year - 1 - ty)
+            nz_ea = ea_arr_int[nz_ei]
+            yos_at_term = orig_term_age - nz_ea
+            entry_yr = ty - yos_at_term
 
-        # 6. Remove refunds from new terms
-        # After TM shift, members at age position `a` have term_age = a
-        # (R counts termination at the post-shift age)
-        # entry_year = year - (age - entry_age) = year - yos
-        for ei, ea in enumerate(entry_ages):
-            for ai, age in enumerate(ages):
-                if new_term_stocks[year][ei, ai] > 1e-10:
-                    term_age = age  # post-shift = R's term_age
-                    yos = term_age - ea
-                    entry_year_member = year - yos
-                    rp = refund_lookup.get((entry_year_member, ea, term_age), 0)
-                    if rp > 0:
-                        refund_amount = new_term_stocks[year][ei, ai] * rp
-                        new_term_stocks[year][ei, ai] -= refund_amount
-                        all_refund.append((ea, age, year, year, refund_amount))
+            # Batch resolve tiers to determine mortality type
+            if constants is not None:
+                cn_arr = np.full(len(nz_ei), class_name, dtype=object)
+                tiers = _resolve_tiers_vec(
+                    constants, cn_arr, entry_yr, nz_age, yos_at_term,
+                )
+                is_ret = np.array(
+                    ["norm" in t_str or "early" in t_str for t_str in tiers]
+                )
+            else:
+                # Fallback: all use employee mortality
+                is_ret = np.zeros(len(nz_ei), dtype=bool)
 
-        # 7. Remove retirees from ALL term stocks → add to retire stocks
+            # Apply appropriate survival rate
+            emp_surv = emp_surv_by_year[nz_ai, surv_year]
+            ret_surv = ret_surv_by_year[nz_ai, surv_year]
+            surv = np.where(is_ret, ret_surv, emp_surv)
+            ts[nz_ei, nz_ai] *= surv
+
+            new_term_stocks[ty] = ts @ TM
+
+        # 5. New terms
+        new_term_stocks[year] = (active2term @ TM).copy()
+
+        # 6. Remove refunds from new terms (vectorized)
+        rp_slice = refund_prob_arr[:, :, t]
+        refund_amounts = new_term_stocks[year] * rp_slice
+        new_term_stocks[year] -= refund_amounts
+        all_refund.extend(_record_matrix(refund_amounts, year, extra_cols=(year,)))
+
+        # 7. Remove retirees from ALL term stocks
         for ty in list(new_term_stocks.keys()):
             ts = new_term_stocks[ty]
-            for ei, ea in enumerate(entry_ages):
-                for ai, age in enumerate(ages):
-                    if ts[ei, ai] > 1e-10:
-                        orig_term_age = age - (year - ty)
-                        entry_year_member = year - (age - ea)
-                        ret_prob = retire_lookup.get((entry_year_member, ea, orig_term_age, age), 0)
-                        if ret_prob > 0:
-                            retire_amount = ts[ei, ai] * ret_prob
-                            ts[ei, ai] -= retire_amount
-                            # Add to retire stock
-                            key = (ty, year)
-                            if key not in new_retire_stocks:
-                                new_retire_stocks[key] = np.zeros((n_entry, n_ages))
-                            new_retire_stocks[key][ei, ai] += retire_amount
+            nz_ei, nz_ai = np.nonzero(ts > 1e-10)
+            if len(nz_ei) == 0:
+                continue
 
-        # 8. Age existing retire stocks with mortality + TM
-        # R: retire2death = wf_retire * mort_array; wf_retire = (wf_retire - retire2death) %*% TM
+            nz_age = nz_ai + min_age
+            nz_ea = ea_arr_int[nz_ei]
+            orig_ta = nz_age - (year - ty)
+            entry_year_member = year - (nz_age - nz_ea)
+
+            # Look up retire probabilities for nonzero cells
+            ret_probs = np.array([
+                retire_lookup.get(
+                    (int(entry_year_member[k]), int(nz_ea[k]),
+                     int(orig_ta[k]), int(nz_age[k])), 0)
+                for k in range(len(nz_ei))
+            ])
+
+            has_ret = ret_probs > 0
+            if not has_ret.any():
+                continue
+
+            ret_ei = nz_ei[has_ret]
+            ret_ai = nz_ai[has_ret]
+            retire_amounts_vals = ts[ret_ei, ret_ai] * ret_probs[has_ret]
+            ts[ret_ei, ret_ai] -= retire_amounts_vals
+
+            key = (ty, year)
+            if key not in new_retire_stocks:
+                new_retire_stocks[key] = np.zeros((n_entry, n_ages))
+            new_retire_stocks[key][ret_ei, ret_ai] += retire_amounts_vals
+
+        # 8. Age existing retire stocks with retiree mortality
         new_retire_stocks_all = {}
         for (ty, ry), rs in retire_stocks.items():
-            # Apply retiree mortality
-            if hasattr(mortality_rates, 'get_rates_vec'):
-                for ei, ea in enumerate(entry_ages):
-                    for ai, age in enumerate(ages):
-                        if rs[ei, ai] > 1e-10:
-                            # Retirees use retiree mortality
-                            mort = mortality_rates.get_rate(age, year - 1, is_retiree=True)
-                            rs[ei, ai] *= (1 - mort)
-            aged = rs @ TM
-            new_retire_stocks_all[(ty, ry)] = aged
+            rs = rs * ret_surv_by_year[:, surv_year]  # retirees always use retiree mortality
+            new_retire_stocks_all[(ty, ry)] = rs @ TM
 
-        # Merge new retirees into the accumulated stocks
+        # Merge new retirees
         for key, rs in new_retire_stocks.items():
             if key in new_retire_stocks_all:
                 new_retire_stocks_all[key] += rs
@@ -267,19 +355,12 @@ def project_workforce(
 
         retire_stocks = new_retire_stocks_all
 
-        # Record term stocks
+        # Record term and retire stocks
         for ty, ts in new_term_stocks.items():
-            for ei, ea in enumerate(entry_ages):
-                for ai, age in enumerate(ages):
-                    if ts[ei, ai] > 1e-10:
-                        all_term.append((ea, age, year, ty, ts[ei, ai]))
+            all_term.extend(_record_matrix(ts, year, extra_cols=(ty,)))
 
-        # Record retire stocks
         for (ty, ry), rs in retire_stocks.items():
-            for ei, ea in enumerate(entry_ages):
-                for ai, age in enumerate(ages):
-                    if rs[ei, ai] > 1e-10:
-                        all_retire.append((ea, age, year, ty, ry, rs[ei, ai]))
+            all_retire.extend(_record_matrix(rs, year, extra_cols=(ty, ry)))
 
         term_stocks = new_term_stocks
 
