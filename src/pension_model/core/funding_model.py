@@ -165,11 +165,17 @@ def compute_funding(
     class_names_7 = ["regular", "special", "admin", "eso", "eco", "judges", "senior_management"]
     class_names_no_frs = class_names_7 + ["drop"]
 
-    # Return scenario setup
+    # Return scenario setup — select which column of return_scenarios to use.
+    # "assumption" (default) → assets earn dr_current each year.
+    # "model" → assets earn model_return each year.
+    # Other columns (e.g. "recession") use their pre-loaded values.
+    return_scen_col = constants.raw.get("economic", {}).get("return_scen", "assumption")
     ret_scen = return_scenarios.copy()
-    ret_scen.loc[ret_scen["year"] == 2023, ["model", "assumption"]] = [econ.model_return, dr_current]
-    ret_scen.loc[ret_scen["year"] > 2023, "model"] = econ.model_return
-    ret_scen.loc[ret_scen["year"] > 2023, "assumption"] = dr_current
+    # Year 1 (start_year+1) keeps its CSV values (actual realized return).
+    # Years after that use model_return / dr_current as the projected path.
+    first_proj_year = r.start_year + 2  # year after the first projection year
+    ret_scen.loc[ret_scen["year"] >= first_proj_year, "model"] = econ.model_return
+    ret_scen.loc[ret_scen["year"] >= first_proj_year, "assumption"] = dr_current
 
     if fund_params.amo_method == "level $":
         amo_pay_growth = 0
@@ -411,7 +417,7 @@ def compute_funding(
 
             year = start_year + i
             roa_row = ret_scen[ret_scen["year"] == year]
-            roa = roa_row["assumption"].iloc[0] if len(roa_row) > 0 else dr_current
+            roa = roa_row[return_scen_col].iloc[0] if len(roa_row) > 0 else dr_current
             f.loc[i, "roa"] = roa
             frs.loc[i, "roa"] = roa
 
@@ -690,7 +696,10 @@ def compute_funding_trs(
     start_year = r_cfg.start_year
     n_years = model_period + 1
 
-    # --- Load initial row from Excel ---
+    # Return scenario column selection (same logic as FRS)
+    return_scen_col = constants.raw.get("economic", {}).get("return_scen", "assumption")
+
+    # --- Load initial row ---
     init = funding_inputs["init_funding"].iloc[0]
     ret_scen = funding_inputs["return_scenarios"].copy()
 
@@ -944,7 +953,7 @@ def compute_funding_trs(
 
         # Return on assets
         roa_row = ret_scen[ret_scen["year"] == year]
-        roa = roa_row["assumption"].iloc[0] if len(roa_row) > 0 else dr_current
+        roa = roa_row[return_scen_col].iloc[0] if len(roa_row) > 0 else dr_current
         f.loc[i, "ROA"] = roa
 
         # Cash flows and solvency contribution
