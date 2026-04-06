@@ -29,16 +29,15 @@ You must activate the virtual environment each time you open a new terminal. You
 
 ## Running the model
 
-From the project directory:
+Available plans: `frs` (Florida Retirement System), `txtrs` (Texas TRS). Substitute plan names in the examples below.
 
 ```bash
-pension-model list                     # list discovered plans
-pension-model run frs                  # run FRS model + baseline validation tests
-pension-model run frs --no-test        # run model only, skip tests
-pension-model run frs --test-only      # run tests only
-pension-model run frs --truth-table    # also write R-vs-Python truth table to Excel
-pension-model run txtrs --no-test      # run Texas TRS model
-pension-model run frs --no-test --scenario scenarios/high_discount.json
+pension-model list                        # list discovered plans
+pension-model run frs --no-test           # run model only, skip tests
+pension-model run frs                     # run model + baseline validation tests
+pension-model run frs --test-only         # run tests only
+pension-model run frs --truth-table       # also write R-vs-Python truth table to Excel
+pension-model run frs --no-test --scenario scenarios/low_return.json  # run a scenario
 ```
 
 Plans are auto-discovered from `plans/<plan>/config/plan_config.json`. Each plan
@@ -81,24 +80,30 @@ Create a JSON file with an `overrides` dict that deep-merges into the plan confi
 
 ```json
 {
-  "name": "high_discount",
-  "description": "Discount rate sensitivity: 7.5%",
+  "name": "low_return",
+  "description": "Pessimistic investment return: 5%",
   "overrides": {
-    "economic": { "dr_current": 0.075, "dr_new": 0.075, "model_return": 0.075 }
+    "economic": { "model_return": 0.05, "return_scen": "model" }
   }
 }
 ```
 
-See `scenarios/` for examples. Overridable sections: `economic`, `benefit.cola`,
-`funding` (amortization, smoothing), `ranges` (model_period).
+See `scenarios/` for examples. Overridable sections: `economic` (discount rate,
+investment return, inflation, payroll growth), `benefit.cola`, `funding`
+(amortization method/period, asset smoothing), `ranges` (model_period).
+
+Note: when overriding `model_return` separately from `dr_current`, set
+`"return_scen": "model"` so the funding model uses the model return column
+instead of the assumption (discount rate) column.
 
 ## Calibration
 
-Calibration computes adjustment factors so the model's baseline output matches the actuarial valuation report. Run it after changing benefit formulas, data, or decrement tables — not after changing policy assumptions.
+Calibration computes adjustment factors so the model's baseline output matches the actuarial valuation report. Run it after changing benefit formulas, data, or decrement tables -- not after changing policy assumptions.
 
 ```bash
-pension-model calibrate frs            # compute calibration and print diagnostics
-pension-model calibrate frs --write    # also write factors to configs/frs/calibration.json
+pension-model calibrate frs               # compute calibration and print diagnostics
+pension-model calibrate frs --write       # also write factors to plans/frs/config/calibration.json
+pension-model calibrate txtrs             # works for any plan
 ```
 
 See [docs/calibration.md](docs/calibration.md) for details and [docs/developer.md](docs/developer.md) for the full developer guide.
