@@ -206,7 +206,8 @@
       "retiree_pop": 508701,
       "total_active_member": 970872,
       "er_dc_cont_rate": 0.0,
-      "val_norm_cost": 0.121
+      "val_norm_cost": 0.121,
+      "val_aal": 273095060051
     }
   },
 

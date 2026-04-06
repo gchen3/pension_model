@@ -247,49 +247,63 @@
       "retiree_pop": 393308,
       "total_active_member": 537128,
       "er_dc_cont_rate": 0.066,
-      "val_norm_cost": 0.0896
+      "val_norm_cost": 0.0896,
+      "val_aal": 145585523000,
+      "val_payroll": 29126383663
     },
     "special": {
       "outflow": 2423470000,
       "retiree_pop": 41696,
       "total_active_member": 72925,
       "er_dc_cont_rate": 0.1654,
-      "val_norm_cost": 0.2013
+      "val_norm_cost": 0.2013,
+      "val_aal": 45070773000,
+      "val_payroll": 5451709307
     },
     "admin": {
       "outflow": 8090000,
       "retiree_pop": 160,
       "total_active_member": 104,
       "er_dc_cont_rate": 0.0843,
-      "val_norm_cost": 0.1457
+      "val_norm_cost": 0.1457,
+      "val_aal": 90337000,
+      "val_payroll": 5381322
     },
     "eco": {
       "outflow": 9442000,
       "retiree_pop": 227,
       "total_active_member": 2075,
       "er_dc_cont_rate": 0.0994,
-      "val_norm_cost": 0.1254
+      "val_norm_cost": 0.1254,
+      "val_aal": 138008000,
+      "val_payroll": 7973936
     },
     "eso": {
       "outflow": 53526000,
       "retiree_pop": 1446,
       "total_active_member": 2075,
       "er_dc_cont_rate": 0.1195,
-      "val_norm_cost": 0.1463
+      "val_norm_cost": 0.1463,
+      "val_aal": 751363000,
+      "val_payroll": 57226218
     },
     "judges": {
       "outflow": 105844000,
       "retiree_pop": 989,
       "total_active_member": 2075,
       "er_dc_cont_rate": 0.1405,
-      "val_norm_cost": 0.1777
+      "val_norm_cost": 0.1777,
+      "val_aal": 1545348000,
+      "val_payroll": 146524097
     },
     "senior_management": {
       "outflow": 338664000,
       "retiree_pop": 5828,
       "total_active_member": 7610,
       "er_dc_cont_rate": 0.0798,
-      "val_norm_cost": 0.1086
+      "val_norm_cost": 0.1086,
+      "val_aal": 6039701000,
+      "val_payroll": 824335420
     }
   },
 

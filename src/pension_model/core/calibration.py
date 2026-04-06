@@ -100,6 +100,8 @@ def load_targets_from_init_funding(
 
     init_funding: DataFrame with columns 'class', 'total_aal', 'total_payroll', etc.
     val_norm_costs: dict mapping class_name -> AV normal cost rate.
+
+    .. deprecated:: Use ``build_targets_from_config`` instead.
     """
     targets = {}
     for _, row in init_funding.iterrows():
@@ -111,6 +113,29 @@ def load_targets_from_init_funding(
             val_aal=row["total_aal"],
             val_payroll=row.get("total_payroll"),
             val_benefit_payments=row.get("total_ben_payment") if "total_ben_payment" in row.index else None,
+        )
+    return targets
+
+
+def build_targets_from_config(constants) -> Dict[str, CalibrationTargets]:
+    """Build calibration targets from plan config's acfr_data.
+
+    Requires each class entry in acfr_data to have at least ``val_norm_cost``
+    and ``val_aal``.  Works for any plan.
+    """
+    targets = {}
+    acfr = constants.acfr_data
+    for cn in constants.classes:
+        entry = acfr.get(cn, {})
+        vnc = entry.get("val_norm_cost")
+        val_aal = entry.get("val_aal")
+        if vnc is None or val_aal is None:
+            continue
+        targets[cn] = CalibrationTargets(
+            val_norm_cost=vnc,
+            val_aal=val_aal,
+            val_payroll=entry.get("val_payroll"),
+            val_benefit_payments=entry.get("outflow"),
         )
     return targets
 
@@ -172,6 +197,46 @@ def format_diagnostics(
                     f"  {cn:20s} {r.model_payroll/1e9:14.2f} {t.val_payroll/1e9:14.2f} "
                     f"{ratio:8.4f}"
                 )
+
+    return "\n".join(lines)
+
+
+def format_comparison(
+    results: Dict[str, CalibrationResult],
+    existing_path: Path,
+) -> Optional[str]:
+    """Compare computed calibration to an existing calibration.json.
+
+    Returns formatted comparison string, or None if no existing file.
+    """
+    if not existing_path.exists():
+        return None
+
+    import json
+    with open(existing_path) as f:
+        existing = json.load(f)
+
+    existing_classes = existing.get("classes", {})
+    if not existing_classes:
+        return None
+
+    lines = []
+    lines.append("  Comparison with existing calibration.json:")
+    lines.append(f"  {'Class':20s} {'nc_cal(new)':>12s} {'nc_cal(old)':>12s} {'diff':>10s}  "
+                 f"{'pvfb(new,$B)':>12s} {'pvfb(old,$B)':>12s} {'diff($M)':>10s}")
+    lines.append(f"  {'-'*20} {'-'*12} {'-'*12} {'-'*10}  {'-'*12} {'-'*12} {'-'*10}")
+
+    for cn in sorted(results.keys()):
+        r = results[cn]
+        old = existing_classes.get(cn, {})
+        old_nc = old.get("nc_cal", 1.0)
+        old_pvfb = old.get("pvfb_term_current", 0.0)
+        nc_diff = r.nc_cal - old_nc
+        pvfb_diff = r.pvfb_term_current - old_pvfb
+        lines.append(
+            f"  {cn:20s} {r.nc_cal:12.7f} {old_nc:12.7f} {nc_diff:10.2e}  "
+            f"{r.pvfb_term_current/1e9:12.4f} {old_pvfb/1e9:12.4f} {pvfb_diff/1e6:10.2f}"
+        )
 
     return "\n".join(lines)
 

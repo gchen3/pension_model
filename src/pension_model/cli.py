@@ -350,16 +350,12 @@ def cmd_calibrate(args):
     """Run calibration: compute nc_cal and pvfb_term_current from AV targets."""
     from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.plan_config import discover_plans, load_plan_config
-    from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
-        load_targets_from_init_funding, run_calibration, format_diagnostics,
-        write_calibration_json,
+        build_targets_from_config, run_calibration, format_diagnostics,
+        format_comparison, write_calibration_json,
     )
 
     plan_name = args.plan_name
-    if plan_name != "frs":
-        print(f"  Calibration for '{plan_name}' is not yet supported. Only 'frs' is available.")
-        sys.exit(1)
 
     plans = discover_plans()
     if plan_name not in plans:
@@ -376,12 +372,13 @@ def cmd_calibrate(args):
     # Load config without calibration -> neutral (nc_cal=1.0, pvfb_term_current=0)
     constants = load_plan_config(config_path, calibration_path=Path("__no_calibration__"))
     cal_factor = constants.benefit.cal_factor
-    classes = list(constants.classes)
 
-    # Build calibration targets from init_funding_data + known AV NC rates
-    funding_inputs = load_funding_inputs(BASELINE)
-    val_norm_costs = {cn: constants.class_data[cn].val_norm_cost for cn in classes}
-    targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)
+    # Build calibration targets from config's acfr_data
+    targets = build_targets_from_config(constants)
+    if not targets:
+        print(f"  No calibration targets found in acfr_data for {plan_name!r}.")
+        print(f"  Each class needs val_norm_cost and val_aal in acfr_data.")
+        sys.exit(1)
 
     # Run pipeline with neutral calibration
     print("  Running uncalibrated pipeline...")
@@ -396,9 +393,16 @@ def cmd_calibrate(args):
     # Print diagnostics
     print(format_diagnostics(results, targets, cal_factor))
 
+    # Compare to existing calibration.json (e.g. R-derived values)
+    existing_cal_path = config_path.parent / "calibration.json"
+    comparison = format_comparison(results, existing_cal_path)
+    if comparison:
+        print()
+        print(comparison)
+
     # Write calibration JSON if requested
     if args.write:
-        output_path = Path(args.output) if args.output else Path(f"configs/{plan_name}/calibration.json")
+        output_path = Path(args.output) if args.output else existing_cal_path
         write_calibration_json(cal_factor, results, output_path)
         print(f"\n  Calibration written to {output_path}")
 
