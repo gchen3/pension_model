@@ -62,6 +62,7 @@ class PlanConfig:
     cola: dict
 
     # Funding
+    funding_model: str   # "frs" or "trs" — selects which compute_funding to run
     funding_policy: str
     amo_method: str
     amo_period_new: int
@@ -1326,6 +1327,7 @@ def load_plan_config(config_path: Path,
         cola=ben.get("cola", {}),
         cash_balance=ben.get("cash_balance"),
 
+        funding_model=fun.get("model", "frs"),
         funding_policy=fun["policy"],
         amo_method=fun["amo_method"],
         amo_period_new=fun["amo_period_new"],

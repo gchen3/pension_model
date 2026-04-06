@@ -247,43 +247,20 @@ def _emit_truth_table(plan_name, liability, funding, constants, output_dir):
 
 
 # ---------------------------------------------------------------------------
-# Plan-specific pipeline executors
-#
-# Each returns (liability_dict, funding_obj, liability_stacked).
-# The funding object shape varies by plan (dict for FRS, DataFrame for TRS)
-# but build_plan_summary() normalizes them into a common format.
+# Pipeline executor
 # ---------------------------------------------------------------------------
 
-def _execute_frs(constants):
-    """Run FRS liability + funding pipeline."""
+def _execute_pipeline(constants):
+    """Run liability + funding pipeline for any plan.
+
+    Returns (liability_dict, funding_obj, liability_stacked).
+    The funding object shape varies by plan (dict for FRS, DataFrame for TRS)
+    but build_plan_summary() normalizes them into a common format.
+    """
     from pension_model.core.pipeline import run_plan_pipeline
-    from pension_model.core.funding_model import load_funding_inputs, compute_funding
-
-    classes = list(constants.classes)
-
-    print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
-    liability = run_plan_pipeline(constants, BASELINE, progress=True)
-
-    liability_frames = []
-    for cn in classes:
-        df = liability[cn].copy()
-        df["plan_name"] = constants.plan_name
-        df["class_name"] = cn
-        liability_frames.append(df)
-    liability_stacked = pd.concat(liability_frames, ignore_index=True)
-
-    print("  Computing funding...")
-    funding_inputs = load_funding_inputs(BASELINE)
-    funding = compute_funding(liability, funding_inputs, constants)
-
-    return liability, funding, liability_stacked
-
-
-def _execute_txtrs(constants):
-    """Run Texas TRS liability + funding pipeline."""
-    from pension_model.core.pipeline import run_plan_pipeline
-    from pension_model.core.funding_model import compute_funding_trs
-    from pension_model.core.txtrs_loader import load_txtrs_funding_data
+    from pension_model.core.funding_model import (
+        load_funding_inputs, compute_funding, compute_funding_trs,
+    )
 
     print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
     liability = run_plan_pipeline(constants, BASELINE, progress=True)
@@ -297,17 +274,17 @@ def _execute_txtrs(constants):
     liability_stacked = pd.concat(liability_frames, ignore_index=True)
 
     print("  Computing funding...")
-    raw_dir = Path("R_model/R_model_txtrs")
-    funding_inputs = load_txtrs_funding_data(raw_dir)
-    funding = compute_funding_trs(liability["all"], funding_inputs, constants)
+    funding_dir = constants.resolve_data_dir() / "funding"
+    funding_inputs = load_funding_inputs(funding_dir)
+
+    funding_model = constants.funding_model
+    if funding_model == "trs":
+        funding = compute_funding_trs(
+            liability[list(constants.classes)[0]], funding_inputs, constants)
+    else:
+        funding = compute_funding(liability, funding_inputs, constants)
 
     return liability, funding, liability_stacked
-
-
-_PIPELINE_EXECUTORS = {
-    "frs": _execute_frs,
-    "txtrs": _execute_txtrs,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +300,7 @@ def _run_plan(constants, args):
     print("=" * 60)
 
     t0 = time.time()
-    executor = _PIPELINE_EXECUTORS[plan_name]
-    liability, funding, liability_stacked = executor(constants)
+    liability, funding, liability_stacked = _execute_pipeline(constants)
     elapsed = time.time() - t0
     print(f"  Pipeline complete: {elapsed:.0f}s")
 
@@ -439,10 +415,6 @@ def cmd_run(args):
         print(f"Unknown plan: {args.plan!r}. Available plans: {available}")
         sys.exit(2)
 
-    if args.plan not in _PIPELINE_EXECUTORS:
-        print(f"Plan {args.plan!r} has a config but no pipeline executor registered.")
-        sys.exit(2)
-
     config_path = plans[args.plan]
     cal_path = config_path.parent / "calibration.json"
     constants = load_plan_config(
@@ -468,9 +440,8 @@ def cmd_list(args):
         return
     print("Discovered plans:")
     for name, path in sorted(plans.items()):
-        status = "runnable" if name in _PIPELINE_EXECUTORS else "config only"
         rel = path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path
-        print(f"  {name:20s} {status:12s} {rel}")
+        print(f"  {name:20s} {rel}")
 
 
 def main():

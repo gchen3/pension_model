@@ -23,13 +23,38 @@ from pension_model.core.pipeline import _get_pmt
 import math
 
 
-def load_funding_inputs(baseline_dir: Path) -> dict:
-    """Load all funding-specific input data."""
-    return {
-        "init_funding": pd.read_csv(baseline_dir / "init_funding_data.csv"),
-        "amort_layers": pd.read_csv(baseline_dir / "current_amort_layers.csv"),
-        "return_scenarios": pd.read_csv(baseline_dir / "return_scenarios.csv"),
+def load_funding_inputs(funding_dir: Path) -> dict:
+    """Load funding input data from ``data/<plan>/funding/``.
+
+    Files:
+      - ``init_funding.csv``  (required)
+      - ``return_scenarios.csv`` (required)
+      - ``amort_layers.csv`` (optional — FRS only)
+
+    Also accepts the legacy ``baseline_outputs/`` layout where the files
+    are named ``init_funding_data.csv`` and ``current_amort_layers.csv``.
+    """
+    # init_funding: try standard name first, fall back to legacy
+    init_path = funding_dir / "init_funding.csv"
+    if not init_path.exists():
+        init_path = funding_dir / "init_funding_data.csv"
+    init_funding = pd.read_csv(init_path)
+    # Normalize column names (TRS Excel had ' AAL' with leading space)
+    init_funding.columns = [c.strip() for c in init_funding.columns]
+
+    result = {
+        "init_funding": init_funding,
+        "return_scenarios": pd.read_csv(funding_dir / "return_scenarios.csv"),
     }
+
+    # Amort layers (FRS only)
+    amort_path = funding_dir / "amort_layers.csv"
+    if not amort_path.exists():
+        amort_path = funding_dir / "current_amort_layers.csv"
+    if amort_path.exists():
+        result["amort_layers"] = pd.read_csv(amort_path)
+
+    return result
 
 
 def _get_init_row(init_funding: pd.DataFrame, class_name: str) -> pd.Series:
