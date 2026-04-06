@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 FRS_CLASSES = ["regular", "special", "admin", "eco", "eso",
                "judges", "senior_management"]
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
+FRS_BASELINES = Path(__file__).parent.parent.parent / "plans" / "frs" / "baselines"
 
 
 @pytest.fixture(scope="module")
@@ -156,7 +156,7 @@ def test_adj_ratio_handles_long_format(class_name, frs_config):
     hc_long = pd.read_csv(demo_dir / f"{class_name}_headcount.csv")
     assert "count" in hc_long.columns, "stage 3 headcount must have count column"
 
-    adj = compute_adjustment_ratio(class_name, hc_long, frs_config, BASELINE)
+    adj = compute_adjustment_ratio(class_name, hc_long, frs_config)
 
     # Independently compute expected value
     expected_denom = float(hc_long["count"].sum())
@@ -208,7 +208,7 @@ def stage3_liability(frs_config):
     """Run the stage 3 liability pipeline once for all FRS classes."""
     from pension_model.core.pipeline import run_plan_pipeline
 
-    return run_plan_pipeline(frs_config, BASELINE)
+    return run_plan_pipeline(frs_config)
 
 
 @pytest.mark.parametrize("class_name", FRS_CLASSES)
@@ -221,7 +221,7 @@ def test_stage3_total_aal_matches_r_year_1(class_name, stage3_liability):
     projection, or liability computation that causes a year-0/1 divergence.
     """
     py = stage3_liability[class_name]
-    r = pd.read_csv(BASELINE / f"{class_name}_liability.csv")
+    r = pd.read_csv(FRS_BASELINES / f"{class_name}_liability.csv")
 
     py_val = float(py["total_aal_est"].iloc[0])
     r_val = float(r["total_aal_est"].iloc[0])
@@ -240,7 +240,7 @@ def test_stage3_total_aal_matches_r_year_30(class_name, stage3_liability):
     to projected cohorts).
     """
     py = stage3_liability[class_name]
-    r = pd.read_csv(BASELINE / f"{class_name}_liability.csv")
+    r = pd.read_csv(FRS_BASELINES / f"{class_name}_liability.csv")
 
     assert len(py) > 30, f"{class_name} pipeline produced fewer than 31 rows"
     assert len(r) > 30, f"{class_name} R baseline has fewer than 31 rows"

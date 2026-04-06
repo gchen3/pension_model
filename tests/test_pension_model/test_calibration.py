@@ -14,7 +14,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
+FRS_BASELINES = Path(__file__).parent.parent.parent / "plans" / "frs" / "baselines"
+FRS_CONFIG_DIR = Path(__file__).parent.parent.parent / "plans" / "frs" / "config"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 
 
@@ -23,20 +24,17 @@ def calibration_results():
     """Run calibration and return (results, targets, constants)."""
     from pension_model.core.pipeline import run_plan_pipeline
     from pension_model.plan_config import load_frs_config
-    from pension_model.core.funding_model import load_funding_inputs
     from pension_model.core.calibration import (
-        load_targets_from_init_funding, run_calibration,
+        build_targets_from_config, run_calibration,
     )
 
     # Neutral calibration: passing a non-existent calibration path makes
     # load_plan_config skip calibration loading, so nc_cal defaults to 1.0
     # and pvfb_term_current to 0.0 for every class.
     constants = load_frs_config(calibration_path=Path("__no_calibration__"))
-    funding_inputs = load_funding_inputs(BASELINE)
-    val_norm_costs = {cn: constants.class_data[cn].val_norm_cost for cn in CLASSES}
-    targets = load_targets_from_init_funding(funding_inputs["init_funding"], val_norm_costs)
+    targets = build_targets_from_config(constants)
 
-    liability = run_plan_pipeline(constants, BASELINE)
+    liability = run_plan_pipeline(constants)
 
     results = run_calibration(liability, targets, constants.ranges.start_year)
     return results, targets, constants
@@ -44,11 +42,11 @@ def calibration_results():
 
 @pytest.mark.parametrize("class_name", CLASSES)
 def test_nc_cal_matches_json(calibration_results, class_name):
-    """Computed nc_cal should match the value in configs/frs/calibration.json."""
+    """Computed nc_cal should match the value in calibration.json."""
     import json
     results, _, _ = calibration_results
 
-    json_path = Path(__file__).parent.parent.parent / "configs" / "frs" / "calibration.json"
+    json_path = FRS_CONFIG_DIR / "calibration.json"
     with open(json_path) as f:
         cal_json = json.load(f)
 
@@ -66,7 +64,7 @@ def test_pvfb_term_matches_json(calibration_results, class_name):
     import json
     results, _, _ = calibration_results
 
-    json_path = Path(__file__).parent.parent.parent / "configs" / "frs" / "calibration.json"
+    json_path = FRS_CONFIG_DIR / "calibration.json"
     with open(json_path) as f:
         cal_json = json.load(f)
 

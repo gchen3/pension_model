@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
+FRS_BASELINES = Path(__file__).parent.parent.parent / "plans" / "frs" / "baselines"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 
 FUNDING_COLS = [
@@ -30,15 +30,16 @@ def funding_results():
     from pension_model.plan_config import load_frs_config
 
     constants = load_frs_config()
-    liability = run_plan_pipeline(constants, BASELINE)
-    funding_inputs = load_funding_inputs(BASELINE)
+    liability = run_plan_pipeline(constants)
+    funding_dir = constants.resolve_data_dir() / "funding"
+    funding_inputs = load_funding_inputs(funding_dir)
     return compute_funding(liability, funding_inputs, constants)
 
 
 @pytest.mark.parametrize("class_name", CLASSES)
 def test_funding_matches_r_baseline(class_name, funding_results):
     """Verify Python funding output matches R baseline for each class."""
-    rf = pd.read_csv(BASELINE / f"{class_name}_funding.csv")
+    rf = pd.read_csv(FRS_BASELINES / f"{class_name}_funding.csv")
     pf = funding_results[class_name]
 
     max_diff = 0

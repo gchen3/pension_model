@@ -4,7 +4,7 @@
   "truth_table_format": "frs",
 
   "data": {
-    "data_dir": "data/frs"
+    "data_dir": "plans/frs/data"
   },
 
   "economic": {

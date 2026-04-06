@@ -10,7 +10,7 @@ Usage:
     pension-model calibrate <plan>        # compute calibration factors
     pension-model list                    # list discovered plans
 
-Plans are auto-discovered from ``configs/<plan>/plan_config.json``.
+Plans are auto-discovered from ``plans/<plan>/config/plan_config.json``.
 """
 
 import sys
@@ -23,7 +23,6 @@ import numpy as np
 import pandas as pd
 
 
-BASELINE = Path("baseline_outputs")
 OUTPUT_BASE = Path("output")
 
 
@@ -263,7 +262,7 @@ def _execute_pipeline(constants):
     )
 
     print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
-    liability = run_plan_pipeline(constants, BASELINE, progress=True)
+    liability = run_plan_pipeline(constants, progress=True)
 
     liability_frames = []
     for cn in constants.classes:
@@ -358,7 +357,7 @@ def cmd_calibrate(args):
 
     # Run pipeline with neutral calibration
     print("  Running uncalibrated pipeline...")
-    liability = run_plan_pipeline(constants, BASELINE, progress=True)
+    liability = run_plan_pipeline(constants, progress=True)
 
     # Compute calibration
     results = run_calibration(liability, targets, constants.ranges.start_year)
@@ -436,7 +435,7 @@ def cmd_list(args):
 
     plans = discover_plans()
     if not plans:
-        print("No plans found under configs/")
+        print("No plans found under plans/")
         return
     print("Discovered plans:")
     for name, path in sorted(plans.items()):
