@@ -1,6 +1,7 @@
 {
   "plan_name": "txtrs",
   "plan_description": "Texas Teacher Retirement System",
+  "truth_table_format": "txtrs",
 
   "data": {
     "data_dir": "data/txtrs"
@@ -186,7 +187,8 @@
   "modeling": {
     "use_earliest_retire": true,
     "term_vested_method": "bell_curve",
-    "male_mp_forward_shift": 2
+    "male_mp_forward_shift": 2,
+    "entrant_salary_at_start_year": true
   },
 
   "plan_design": {

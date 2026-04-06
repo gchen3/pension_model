@@ -131,6 +131,16 @@ class PlanConfig:
         return data_dir
 
     @property
+    def entrant_salary_at_start_year(self) -> bool:
+        """Whether entrant profile salaries are expressed at start_year level.
+
+        When True, max_hist_year is raised to start_year so future cohorts
+        use the entrant profile salary directly (TRS pattern). When False,
+        max_hist_year comes from the salary_headcount data (FRS pattern).
+        """
+        return self.raw.get("modeling", {}).get("entrant_salary_at_start_year", False)
+
+    @property
     def use_earliest_retire(self) -> bool:
         """Whether to use earliest eligible age (incl. early) vs earliest normal."""
         return self.raw.get("modeling", {}).get("use_earliest_retire", False)

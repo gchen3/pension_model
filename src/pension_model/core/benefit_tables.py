@@ -219,6 +219,7 @@ def build_salary_benefit_table(
     class_name: str,
     constants,
     actual_icr_series: "Optional[pd.Series]" = None,
+    forward_salary_growth: "Optional[pd.DataFrame]" = None,
 ) -> pd.DataFrame:
     """
     Build the salary/benefit table for all cohorts.
@@ -226,21 +227,28 @@ def build_salary_benefit_table(
     For each (entry_year, entry_age, yos): salary, FAS, db_ee_balance,
     and when cash balance is active: cb_ee_balance, cb_er_balance, cb_balance.
 
-    Tier at term_age is resolved via the vectorized resolve_tiers_vec.
-
     Args:
         salary_headcount: Output of build_salary_headcount_table().
         entrant_profile: Output of build_entrant_profile().
-        salary_growth: Salary growth table with yos and class column.
+        salary_growth: AV salary growth table (used for backward calibration
+            in salary_headcount; passed here as fallback for forward projection).
         class_name: Membership class name.
         constants: PlanConfig.
         actual_icr_series: Year→ICR series for CB accumulation (None if no CB).
+        forward_salary_growth: Optional override salary growth table for forward
+            projection. Defaults to salary_growth (AV scale) when None.
+            Use this to test alternative salary growth scenarios without
+            affecting backward entry_salary calibration.
 
     Returns:
-        DataFrame: entry_year, entry_age, yos, term_age, tier_at_term_age,
+        DataFrame: entry_year, entry_age, yos, term_age, tier_id, ret_status,
                    salary, fas, db_ee_balance, cumprod_salary_increase,
                    [cb_ee_cont, cb_er_cont, cb_ee_balance, cb_er_balance, cb_balance]
     """
+    # Forward projection uses a separate salary scale if provided;
+    # defaults to the AV calibration scale (baseline unchanged).
+    if forward_salary_growth is not None:
+        salary_growth = forward_salary_growth
     r = constants.ranges
     econ = constants.economic
     ben = constants.benefit
@@ -315,7 +323,7 @@ def build_salary_benefit_table(
     # but can be overridden to start_year when entrant profile salaries are already
     # at start_year level (e.g., TRS where entrant profile is read from Excel).
     max_hist_year = salary_headcount["entry_year"].max()
-    if constants.plan_name != "frs":
+    if getattr(constants, "entrant_salary_at_start_year", False):
         max_hist_year = max(max_hist_year, constants.ranges.start_year)
     df["salary"] = np.where(
         df["entry_year"] <= max_hist_year,

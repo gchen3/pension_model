@@ -167,12 +167,13 @@ def build_python_truth_table(
 
     Metrics the Python pipeline does not (yet) compute are returned as NA.
     """
-    if plan_name == "frs":
+    fmt = constants.raw.get("truth_table_format", plan_name)
+    if fmt == "frs":
         return _build_python_truth_table_frs(liability, funding, constants)
-    elif plan_name == "txtrs":
+    elif fmt == "txtrs":
         return _build_python_truth_table_txtrs(liability, funding, constants)
     else:
-        raise ValueError(f"unknown plan_name: {plan_name!r}")
+        raise ValueError(f"unknown truth_table_format: {fmt!r}")
 
 
 def _build_python_truth_table_frs(liability, funding, constants) -> pd.DataFrame:

@@ -161,6 +161,7 @@ def build_plan_benefit_tables(
         sbt = build_salary_benefit_table(
             sh, ep, inputs["salary_growth"], cn, constants,
             actual_icr_series=actual_icr_series,
+            forward_salary_growth=inputs.get("forward_salary_growth"),
         )
 
         # Step 3: separation rate — each class owns its own decrement data
@@ -263,18 +264,10 @@ def compute_active_liability(wf_active: pd.DataFrame, benefit_val: pd.DataFrame,
     """
     r = constants.ranges
     new_year = r.new_year
-    design_cutoff = (constants.plan_design_cutoff_year or new_year
-                     if hasattr(constants, "plan_design_cutoff_year") else 2018)
+    design_cutoff = constants.plan_design_cutoff_year or new_year
 
-    # Get design ratios — use generalized method if available, else legacy
-    if hasattr(constants, "get_design_ratios"):
-        design_ratios = constants.get_design_ratios(class_name)
-        benefit_types = list(constants.benefit_types)
-    else:
-        is_special = class_name == "special"
-        db_b, db_a, db_n = constants.plan_design.get_ratios(is_special)
-        design_ratios = {"db": (db_b, db_a, db_n), "dc": (1 - db_b, 1 - db_a, 1 - db_n)}
-        benefit_types = ["db", "dc"]
+    design_ratios = constants.get_design_ratios(class_name)
+    benefit_types = list(constants.benefit_types)
 
     wf = wf_active[wf_active["year"] <= r.start_year + r.model_period].copy()
     wf["entry_year"] = wf["year"] - (wf["age"] - wf["entry_age"])

@@ -1,6 +1,7 @@
 {
   "plan_name": "frs",
   "plan_description": "Florida Retirement System",
+  "truth_table_format": "frs",
 
   "data": {
     "data_dir": "data/frs"
