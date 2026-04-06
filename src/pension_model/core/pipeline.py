@@ -46,7 +46,7 @@ def _headcount_total(df: pd.DataFrame) -> float:
 
 
 def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
-                             constants, baseline_dir: Path) -> float:
+                             constants) -> float:
     """Compute headcount adjustment ratio matching R model.
 
     For grouped classes (eco/eso/judges in FRS) the denominator is the sum
@@ -66,7 +66,6 @@ def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
 def build_plan_benefit_tables(
     inputs_by_class: dict,
     constants,
-    baseline_dir: Path,
 ) -> dict:
     """Build every benefit table the plan needs in a single stacked pass.
 
@@ -88,8 +87,6 @@ def build_plan_benefit_tables(
     Args:
         inputs_by_class: dict {class_name: inputs dict from load_plan_data}.
         constants: PlanConfig.
-        baseline_dir: Baseline directory (for compute_adjustment_ratio).
-
     Returns:
         Dict of stacked DataFrames keyed by:
           salary_headcount, entrant_profile, salary_benefit,
@@ -117,7 +114,7 @@ def build_plan_benefit_tables(
         inputs = inputs_by_class[cn]
 
         adj_ratio = compute_adjustment_ratio(
-            cn, inputs["headcount"], constants, baseline_dir,
+            cn, inputs["headcount"], constants,
         )
 
         # Per-class ICR (only for CB plans)
@@ -906,7 +903,7 @@ def _split_plan_tables_by_class(plan_tables: dict, classes: list) -> dict:
 
 def run_plan_pipeline(
     constants,
-    baseline_dir: Path,
+    baseline_dir: Path = None,
     *,
     no_new_entrants: bool = False,
     on_stage=None,
@@ -922,7 +919,7 @@ def run_plan_pipeline(
 
     Args:
         constants: PlanConfig.
-        baseline_dir: Baseline data directory.
+        baseline_dir: Deprecated, ignored. Kept for caller compatibility.
         no_new_entrants: Rundown mode — no new hires projected.
         on_stage: Optional callback(stage_name: str) for progress reporting.
         progress: If True, print percent-done progress to stdout.
@@ -941,7 +938,7 @@ def run_plan_pipeline(
 
     if on_stage:
         on_stage("benefit_tables")
-    plan_tables = build_plan_benefit_tables(inputs_by_class, constants, baseline_dir)
+    plan_tables = build_plan_benefit_tables(inputs_by_class, constants)
 
     # Split stacked tables into per-class views once (single groupby pass
     # per frame) instead of re-scanning inside the per-class loop.

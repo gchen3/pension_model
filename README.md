@@ -40,8 +40,20 @@ pension-model run frs --truth-table    # also write R-vs-Python truth table to E
 pension-model run txtrs --no-test      # run Texas TRS model
 ```
 
-Plans are auto-discovered from `configs/<plan>/plan_config.json`; adding a
-new plan is just a matter of dropping a config directory with plan data.
+Plans are auto-discovered from `plans/<plan>/config/plan_config.json`. Each plan
+directory contains everything needed to run that plan:
+
+```
+plans/
+  frs/
+    config/       plan_config.json, calibration.json
+    data/         stage 3 CSVs (demographics, decrements, mortality, funding)
+    baselines/    R model reference outputs (for validation)
+  txtrs/
+    config/
+    data/
+    baselines/
+```
 
 ### Output
 

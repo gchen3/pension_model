@@ -13,7 +13,7 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
+FRS_BASELINES = Path(__file__).parent.parent.parent / "plans" / "frs" / "baselines"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 
 
@@ -22,17 +22,17 @@ class TestSalaryHeadcountTable:
 
     @pytest.fixture
     def salary_growth(self):
-        return pd.read_csv(BASELINE / "salary_growth_table.csv")
+        return pd.read_csv(FRS_BASELINES / "salary_growth_table.csv")
 
     def _load_raw(self, class_name):
         """Load raw wide-format salary and headcount tables."""
-        sal = pd.read_csv(BASELINE / f"{class_name}_salary.csv")
-        hc = pd.read_csv(BASELINE / f"{class_name}_headcount.csv")
+        sal = pd.read_csv(FRS_BASELINES / f"{class_name}_salary.csv")
+        hc = pd.read_csv(FRS_BASELINES / f"{class_name}_headcount.csv")
         return sal, hc
 
     def _load_r_result(self, class_name):
         """Load R's salary_headcount_table for comparison."""
-        return pd.read_csv(BASELINE / f"{class_name}_salary_headcount.csv")
+        return pd.read_csv(FRS_BASELINES / f"{class_name}_salary_headcount.csv")
 
     def _get_adjustment_ratio(self, class_name):
         """Compute headcount adjustment ratio matching R model."""
@@ -42,16 +42,16 @@ class TestSalaryHeadcountTable:
         if class_name in ("eco", "eso", "judges"):
             # R uses a shared ratio: combined_total / combined_raw_count
             combined_total = 2075  # eco_eso_judges_total_active_member_
-            eco_hc = pd.read_csv(BASELINE / "eco_headcount.csv")
-            eso_hc = pd.read_csv(BASELINE / "eso_headcount.csv")
-            judges_hc = pd.read_csv(BASELINE / "judges_headcount.csv")
+            eco_hc = pd.read_csv(FRS_BASELINES / "eco_headcount.csv")
+            eso_hc = pd.read_csv(FRS_BASELINES / "eso_headcount.csv")
+            judges_hc = pd.read_csv(FRS_BASELINES / "judges_headcount.csv")
             raw = (eco_hc.iloc[:, 1:].sum().sum()
                    + eso_hc.iloc[:, 1:].sum().sum()
                    + judges_hc.iloc[:, 1:].sum().sum())
             return combined_total / raw
         else:
             total = c.class_data[class_name].total_active_member
-            hc = pd.read_csv(BASELINE / f"{class_name}_headcount.csv")
+            hc = pd.read_csv(FRS_BASELINES / f"{class_name}_headcount.csv")
             raw = hc.iloc[:, 1:].sum().sum()
             return total / raw
 
@@ -127,16 +127,16 @@ class TestSeparationRateTable:
         from pension_model.plan_config import load_frs_config
 
         constants = load_frs_config()
-        sg = pd.read_csv(BASELINE / "salary_growth_table.csv")
+        sg = pd.read_csv(FRS_BASELINES / "salary_growth_table.csv")
 
         # ESO uses Regular's separation table (R line 588)
         sep_class = self.SEP_CLASS_MAP[class_name]
-        sal = pd.read_csv(BASELINE / f"{sep_class}_salary.csv")
-        hc = pd.read_csv(BASELINE / f"{sep_class}_headcount.csv")
+        sal = pd.read_csv(FRS_BASELINES / f"{sep_class}_salary.csv")
+        hc = pd.read_csv(FRS_BASELINES / f"{sep_class}_headcount.csv")
 
         if sep_class in ("eco", "eso", "judges"):
             combined_raw = sum(
-                pd.read_csv(BASELINE / f"{c}_headcount.csv").iloc[:, 1:].sum().sum()
+                pd.read_csv(FRS_BASELINES / f"{c}_headcount.csv").iloc[:, 1:].sum().sum()
                 for c in ("eco", "eso", "judges")
             )
             adj_ratio = 2075 / combined_raw
@@ -146,7 +146,7 @@ class TestSeparationRateTable:
         sh = build_salary_headcount_table(sal, hc, sg, sep_class, adj_ratio, 2022)
         ep = build_entrant_profile(sh)
 
-        dt = BASELINE / "decrement_tables"
+        dt = FRS_BASELINES / "decrement_tables"
         sep = build_separation_rate_table(
             term_rate_avg=pd.read_csv(dt / f"{sep_class}_term_rate_avg.csv"),
             normal_retire_rate_tier1=pd.read_csv(dt / f"{sep_class}_normal_retire_rate_tier1.csv"),
@@ -158,7 +158,7 @@ class TestSeparationRateTable:
             constants=constants,
         )
 
-        r = pd.read_csv(BASELINE / f"{class_name}_sep_rate.csv")
+        r = pd.read_csv(FRS_BASELINES / f"{class_name}_sep_rate.csv")
         m = sep.merge(r, on=["entry_year", "entry_age", "yos"], suffixes=("_py", "_r"))
 
         mask = m["separation_rate_r"].notna() & (m["separation_rate_r"].abs() > 1e-10)
@@ -190,9 +190,9 @@ class TestAnnFactorTable:
             self.RAW_DIR / "mortality-improvement-scale-mp-2018-rates.xlsx",
             "regular",
         )
-        sg = pd.read_csv(BASELINE / "salary_growth_table.csv")
-        sal = pd.read_csv(BASELINE / "regular_salary.csv")
-        hc = pd.read_csv(BASELINE / "regular_headcount.csv")
+        sg = pd.read_csv(FRS_BASELINES / "salary_growth_table.csv")
+        sal = pd.read_csv(FRS_BASELINES / "regular_salary.csv")
+        hc = pd.read_csv(FRS_BASELINES / "regular_headcount.csv")
         adj = constants.class_data["regular"].total_active_member / hc.iloc[:, 1:].sum().sum()
         sh = build_salary_headcount_table(sal, hc, sg, "regular", adj, 2022)
         ep = build_entrant_profile(sh)
@@ -208,7 +208,7 @@ class TestAnnFactorTable:
     def test_cum_mort_dr_matches_r(self):
         """Verify cum_mort_dr matches R for a subset of Regular class."""
         aft = self._build_compact_aft()
-        bt = pd.read_csv(BASELINE / "regular_bt_term.csv")
+        bt = pd.read_csv(FRS_BASELINES / "regular_bt_term.csv")
         bt_sub = bt[bt["entry_year"] == 2000]
 
         m = bt_sub.merge(
@@ -229,7 +229,7 @@ class TestAnnFactorTable:
         """Verify ann_factor matches R for a subset of Regular class."""
         aft = self._build_compact_aft()
 
-        af = pd.read_csv(BASELINE / "regular_af_retire.csv")
+        af = pd.read_csv(FRS_BASELINES / "regular_af_retire.csv")
         af_sub = af[af["entry_year"] == 2000]
 
         m = af_sub.merge(
@@ -261,9 +261,9 @@ class TestSalaryBenefitTable:
         from pension_model.plan_config import load_frs_config
 
         constants = load_frs_config()
-        salary_growth = pd.read_csv(BASELINE / "salary_growth_table.csv")
-        sal = pd.read_csv(BASELINE / f"{class_name}_salary.csv")
-        hc = pd.read_csv(BASELINE / f"{class_name}_headcount.csv")
+        salary_growth = pd.read_csv(FRS_BASELINES / "salary_growth_table.csv")
+        sal = pd.read_csv(FRS_BASELINES / f"{class_name}_salary.csv")
+        hc = pd.read_csv(FRS_BASELINES / f"{class_name}_headcount.csv")
 
         sh = build_salary_headcount_table(
             sal, hc, salary_growth, class_name,
@@ -276,7 +276,7 @@ class TestSalaryBenefitTable:
         )
 
         # Load R's benefit_data for comparison
-        r_bvt = pd.read_csv(BASELINE / f"{class_name}_benefit_data.csv")
+        r_bvt = pd.read_csv(FRS_BASELINES / f"{class_name}_benefit_data.csv")
 
         # Compare salary for a sample of entry_year/entry_age/yos combinations
         sample = r_bvt[r_bvt["entry_year"] == 2000].head(20)

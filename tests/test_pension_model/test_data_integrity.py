@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-DATA_DIR = Path(__file__).parent.parent.parent / "data"
+DATA_DIR = Path(__file__).parent.parent.parent / "plans"
 
 # Groups of classes that should have identical decrement files.
 # Each tuple is (plan, [class_names]) where every class_name in the list
@@ -26,7 +26,7 @@ def _file_hash(path: Path) -> str:
 @pytest.mark.parametrize("plan,group", SHARED_DECREMENT_GROUPS)
 def test_shared_decrement_files_identical(plan, group):
     """Classes that share decrement sources must have byte-identical data files."""
-    decr_dir = DATA_DIR / plan / "decrements"
+    decr_dir = DATA_DIR / plan / "data" / "decrements"
     for suffix in ["termination_rates.csv", "retirement_rates.csv"]:
         hashes = {}
         for cn in group:

@@ -22,12 +22,15 @@ env/
 .Ruserdata
 *.rds
 
-# Default: ignore large data files
+# Default: ignore large data files everywhere
 *.csv
 *.xlsx
 
-# Stage 3 data: needed for end-to-end pipeline
-# Raw plan inputs (from Excel extraction)
+# ── Plans: track all plan data, config, and baselines ──
+!plans/**/*.csv
+!plans/**/*.json
+
+# ── Legacy baseline_outputs (still referenced by some tests) ──
 !baseline_outputs/*_salary.csv
 !baseline_outputs/*_headcount.csv
 !baseline_outputs/salary_growth_table.csv
@@ -35,11 +38,7 @@ env/
 !baseline_outputs/init_funding_data.csv
 !baseline_outputs/return_scenarios.csv
 !baseline_outputs/current_amort_layers.csv
-
-# R baseline outputs (for validation only)
 !baseline_outputs/*_funding.csv
-
-# R intermediate data (for per-step unit tests)
 !baseline_outputs/*_salary_headcount.csv
 !baseline_outputs/*_sep_rate.csv
 !baseline_outputs/*_bt_term.csv
@@ -47,17 +46,11 @@ env/
 !baseline_outputs/*_benefit_data.csv
 !baseline_outputs/decrement_tables/*.csv
 
-# Raw Excel source data (mortality tables, FRS inputs, retirement rates)
+# Raw Excel source data (R model reference)
 !R_model/R_model_original/pub-2010-headcount-mort-rates.xlsx
 !R_model/R_model_original/mortality-improvement-scale-mp-2018-rates.xlsx
 !R_model/R_model_original/Florida FRS inputs.xlsx
 !R_model/R_model_original/Reports/extracted inputs/*.xlsx
-
-# Standardized stage 3 model input data
-!data/**/*.csv
-
-# Config
-!configs/*.csv
 
 # Memory bank
 memory-bank/

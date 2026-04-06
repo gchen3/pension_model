@@ -32,7 +32,6 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 
 # Projection horizon: youngest entry age ~21, max age 120 → ~100 years needed.
@@ -54,9 +53,10 @@ def rundown_results():
     # property, so we override the field directly.
     constants = replace(constants, model_period=RUNDOWN_PERIOD)
 
-    liability = run_plan_pipeline(constants, BASELINE, no_new_entrants=True)
+    liability = run_plan_pipeline(constants, no_new_entrants=True)
 
-    funding_inputs = load_funding_inputs(BASELINE)
+    funding_dir = constants.resolve_data_dir() / "funding"
+    funding_inputs = load_funding_inputs(funding_dir)
     funding = compute_funding(liability, funding_inputs, constants)
 
     return liability, funding, constants
@@ -184,7 +184,8 @@ class TestRundownAssetProjection:
         constants = rundown_results[2]
 
         from pension_model.core.funding_model import load_funding_inputs
-        funding_inputs = load_funding_inputs(BASELINE)
+        funding_dir = constants.resolve_data_dir() / "funding"
+        funding_inputs = load_funding_inputs(funding_dir)
         init_funding = funding_inputs["init_funding"]
         reg_row = init_funding[init_funding["class"] == "regular"].iloc[0]
         initial_mva = float(reg_row["total_mva"])

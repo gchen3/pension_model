@@ -120,13 +120,12 @@ class PlanConfig:
         """Resolve the stage 3 data directory for this plan.
 
         Reads data.data_dir from config JSON, resolves relative to project root.
-        Falls back to data/{plan_name}/ if not specified.
+        Falls back to plans/{plan_name}/data/ if not specified.
         """
         data_cfg = self.raw.get("data", {})
-        data_dir_str = data_cfg.get("data_dir", f"data/{self.plan_name}")
+        data_dir_str = data_cfg.get("data_dir", f"plans/{self.plan_name}/data")
         data_dir = Path(data_dir_str)
         if not data_dir.is_absolute():
-            # Resolve relative to project root (2 levels up from plan_config.py)
             project_root = Path(__file__).parents[2]
             data_dir = project_root / data_dir
         return data_dir
@@ -1365,24 +1364,24 @@ def load_plan_config(config_path: Path,
     return config
 
 
-def discover_plans(configs_dir: Optional[Path] = None) -> dict[str, Path]:
+def discover_plans(plans_dir: Optional[Path] = None) -> dict[str, Path]:
     """Return a mapping of {plan_name: plan_config.json path} for every plan
-    directory under ``configs/`` that contains a ``plan_config.json``.
+    directory under ``plans/`` that contains a ``config/plan_config.json``.
 
     The plan name is taken from the directory name (not from the JSON's own
     ``plan_name`` field) so the CLI can validate user input without parsing
     every config file. Callers that need the parsed config should call
     ``load_plan_config`` on the returned path.
     """
-    if configs_dir is None:
-        configs_dir = Path(__file__).parents[2] / "configs"
+    if plans_dir is None:
+        plans_dir = Path(__file__).parents[2] / "plans"
     plans: dict[str, Path] = {}
-    if not configs_dir.is_dir():
+    if not plans_dir.is_dir():
         return plans
-    for entry in sorted(configs_dir.iterdir()):
+    for entry in sorted(plans_dir.iterdir()):
         if not entry.is_dir():
             continue
-        cfg = entry / "plan_config.json"
+        cfg = entry / "config" / "plan_config.json"
         if cfg.exists():
             plans[entry.name] = cfg
     return plans
@@ -1390,7 +1389,7 @@ def discover_plans(configs_dir: Optional[Path] = None) -> dict[str, Path]:
 
 def load_frs_config(calibration_path: Optional[Path] = None) -> PlanConfig:
     """Convenience: load the FRS plan config with default paths."""
-    base = Path(__file__).parents[2] / "configs" / "frs"
+    base = Path(__file__).parents[2] / "plans" / "frs" / "config"
     config_path = base / "plan_config.json"
     if calibration_path is None:
         cal_path = base / "calibration.json"
@@ -1401,7 +1400,7 @@ def load_frs_config(calibration_path: Optional[Path] = None) -> PlanConfig:
 
 def load_txtrs_config(calibration_path: Optional[Path] = None) -> PlanConfig:
     """Convenience: load the Texas TRS plan config."""
-    base = Path(__file__).parents[2] / "configs" / "txtrs"
+    base = Path(__file__).parents[2] / "plans" / "txtrs" / "config"
     config_path = base / "plan_config.json"
     cal_path = calibration_path or (base / "calibration.json")
     return load_plan_config(config_path, cal_path if cal_path.exists() else None)

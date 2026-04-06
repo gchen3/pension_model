@@ -12,7 +12,6 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
-BASELINE = Path(__file__).parent.parent.parent / "baseline_outputs"
 CLASSES = ["regular", "special", "admin", "eco", "eso", "judges", "senior_management"]
 CLASSES_PLUS_DROP = CLASSES + ["drop"]
 
@@ -25,8 +24,9 @@ def model_results():
     from pension_model.plan_config import load_frs_config
 
     constants = load_frs_config()
-    liability = run_plan_pipeline(constants, BASELINE)
-    funding_inputs = load_funding_inputs(BASELINE)
+    liability = run_plan_pipeline(constants)
+    funding_dir = constants.resolve_data_dir() / "funding"
+    funding_inputs = load_funding_inputs(funding_dir)
     funding = compute_funding(liability, funding_inputs, constants)
     return liability, funding, constants
 
