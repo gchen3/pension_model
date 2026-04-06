@@ -62,8 +62,9 @@ env/
 # Memory bank
 memory-bank/
 
-# Actuarial calculations
+# Actuarial calculations (except reference PDF)
 actuarial_calculations/
+!actuarial_calculations/winklevoss_converted.pdf
 
 # Temp/output
 output/
