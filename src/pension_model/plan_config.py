@@ -503,7 +503,7 @@ def resolve_cola_scalar(
             break
 
     td = _resolve_tier_def(tier_base, config.tier_defs)
-    cola_key = td.get("cola_key", "tier_1_active")
+    cola_key = td["cola_key"]
     raw_cola = config.cola.get(cola_key, 0.0)
     cola_cutoff = config.cola_proration_cutoff_year
 
@@ -1074,7 +1074,7 @@ def resolve_cola_vec(config: PlanConfig,
         if not mask.any():
             continue
 
-        cola_key = td.get("cola_key", "tier_1_active")
+        cola_key = td["cola_key"]
         raw_cola = config.cola.get(cola_key, 0.0)
 
         should_prorate = (
@@ -1412,7 +1412,7 @@ def load_plan_config(config_path: Path,
     tier_name_to_id = {td["name"]: i for i, td in enumerate(tier_defs_raw)}
     tier_id_to_name = tuple(td["name"] for td in tier_defs_raw)
     tier_id_to_cola_key = tuple(
-        td.get("cola_key", "tier_1_active") for td in tier_defs_raw
+        td["cola_key"] for td in tier_defs_raw
     )
     fas_default = ben.get("fas_years_default", 5)
     tier_id_to_fas_years = tuple(
@@ -1441,7 +1441,7 @@ def load_plan_config(config_path: Path,
         cola=ben.get("cola", {}),
         cash_balance=ben.get("cash_balance"),
 
-        funding_model=fun.get("model", "frs"),
+        funding_model=fun["model"],
         funding_policy=fun["policy"],
         amo_method=fun["amo_method"],
         amo_period_new=fun["amo_period_new"],
