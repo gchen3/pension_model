@@ -172,6 +172,12 @@ class TestSeparationRateTable:
             assert pct.max() < 0.01, f"{class_name}: separation_rate max diff {pct.max():.4f}%"
 
 
+_EXCEL_MORT = Path(__file__).parent.parent.parent / "R_model" / "R_model_frs" / "pub-2010-headcount-mort-rates.xlsx"
+_EXCEL_IMP = Path(__file__).parent.parent.parent / "R_model" / "R_model_frs" / "mortality-improvement-scale-mp-2018-rates.xlsx"
+_EXCEL_AVAILABLE = _EXCEL_MORT.exists() and _EXCEL_IMP.exists()
+
+
+@pytest.mark.skipif(not _EXCEL_AVAILABLE, reason="FRS Excel mortality inputs not available")
 class TestAnnFactorTable:
     """Test build_ann_factor_table against R's extracted cum_mort_dr and ann_factor."""
 
