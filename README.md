@@ -106,4 +106,4 @@ pension-model calibrate frs --write       # also write factors to plans/frs/conf
 pension-model calibrate txtrs             # works for any plan
 ```
 
-See [docs/calibration.md](docs/calibration.md) for details and [docs/developer.md](docs/developer.md) for the full developer guide.
+See [docs/developer.md](docs/developer.md) for the full developer guide, including calibration architecture and diagnostics.
