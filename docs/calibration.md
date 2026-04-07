@@ -6,7 +6,7 @@ Calibration adjusts the model so that its baseline outputs match the actuarial v
 
 ## Architecture
 
-Calibration is computed **once** against the baseline AV and stored in `configs/frs/calibration.json`. Policy analysis runs (different discount rate, mortality table, etc.) reuse the same calibration factors — they do not recalibrate. The calibration captures structural model gaps, not assumption sensitivity.
+Calibration is computed **once** against the baseline AV and stored in `plans/{plan}/config/calibration.json`. Policy analysis runs (different discount rate, mortality table, etc.) reuse the same calibration factors — they do not recalibrate. The calibration captures structural model gaps, not assumption sensitivity.
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
@@ -31,7 +31,7 @@ Calibration is computed **once** against the baseline AV and stored in `configs/
 ### 1. `cal_factor` (global, currently 0.9)
 
 - **What**: Multiplied into every DB benefit calculation
-- **Where**: `benefit_tables.py` and `cohort_calculator.py`
+- **Where**: `core/benefit_tables.py` and `core/cohort_calculator.py`
 - **Formula**: `db_benefit = yos * ben_mult * fas * reduce_factor * cal_factor`
 - **Effect**: Reduces all computed benefits by 10%
 - **Origin**: Set by the R modelers (Reason Foundation) as a rounded first approximation. The R source comment says: "Calibration factor for the benefit model. This is to adjust the normal cost to match the normal cost from the val report."
@@ -40,7 +40,7 @@ Calibration is computed **once** against the baseline AV and stored in `configs/
 ### 2. `nc_cal` (per class, range 0.83–1.40)
 
 - **What**: Multiplied into normal cost rates in the funding model
-- **Where**: `funding_model.py`
+- **Where**: `core/funding_model.py`
 - **Formula**: `nc_cal = val_norm_cost / model_norm_cost`
 - **Effect**: Adjusts each class's NC rate to match the AV exactly
 - **Computed by**: `pension-model calibrate`
@@ -60,7 +60,7 @@ The model computes NC rates with `cal_factor=0.9` already applied. `nc_cal` is t
 ### 3. `pvfb_term_current` (per class, range -$2M to $6.6B)
 
 - **What**: The AAL gap between model and AV, amortized as a growing payment stream
-- **Where**: `pipeline.py` (`compute_current_term_vested_liability`)
+- **Where**: `core/pipeline.py` (`compute_current_term_vested_liability`)
 - **Formula**: `pvfb_term_current = val_aal - model_aal`
 - **Effect**: Adds a liability component that closes the AAL gap over 50 years
 - **Computed by**: `pension-model calibrate`
@@ -69,8 +69,8 @@ The model computes NC rates with `cal_factor=0.9` already applied. `nc_cal` is t
 
 ```bash
 pension-model calibrate frs              # compute and print diagnostics
-pension-model calibrate frs --write      # overwrite configs/frs/calibration.json
-pension-model calibrate frs --write --output path/to/file.json
+pension-model calibrate frs --write      # overwrite plans/frs/config/calibration.json
+pension-model calibrate frs --write --output path/to/calibration.json
 ```
 
 Output includes:
@@ -90,21 +90,19 @@ Output includes:
 - pvfb_term_current > 20% of val_aal — large unexplained liability gap
 - Payroll ratio far from 1.0 — workforce/salary data issues
 
-## File Layout
+## Key Files
 
 ```
-configs/frs/calibration.json    # Computed calibration factors (loaded at runtime)
-src/pension_model/core/
-  calibration.py                # Calibration computation and diagnostics
-  model_constants.py            # ClassACFRData with nc_cal/pvfb_term defaults;
-                                # load_calibration(), apply_calibration(),
-                                # neutral_calibration() helpers
+plans/{plan}/config/calibration.json   # Computed calibration factors (loaded at runtime)
+src/pension_model/core/calibration.py  # Calibration computation and diagnostics
+src/pension_model/plan_config.py       # PlanConfig loads calibration; acfr_data holds AV targets
 ```
 
 ## Targets
 
-Calibration targets currently come from:
-- `val_norm_cost`: per-class normal cost rate from the AV (stored in `ClassACFRData`)
-- `val_aal`: year-0 `total_aal` from `init_funding_data.csv`
+Calibration targets come from the `acfr_data` section of `plan_config.json`:
+- `val_norm_cost`: per-class normal cost rate from the AV
+- `val_aal`: per-class total AAL from the AV
 
-Future: a dedicated `calibration_targets.json` could consolidate all AV targets (NC, AAL, PVFB, PV future salary, benefit payments, headcounts) in one place, separating inputs from funding data.
+Optional diagnostic targets (reported but not calibrated against):
+- `val_payroll`: per-class total payroll from the AV (used for out-of-sample checks)
