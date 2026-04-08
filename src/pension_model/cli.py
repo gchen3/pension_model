@@ -181,12 +181,12 @@ def print_parameters(constants):
 
 
 def print_summary_table(summary):
-    """Print year 1 / year 30 comparison table to console."""
+    """Print start-year / final-year comparison table to console."""
     y1 = summary.iloc[0]
-    y_last = summary.iloc[min(29, len(summary) - 1)]
+    y_last = summary.iloc[-1]
 
     print(f"\n  Summary (all groups combined):")
-    print(f"  {'':30s} {'Year 1 (' + str(int(y1['year'])) + ')':>16s}  {'Year ' + str(min(30, len(summary))) + ' (' + str(int(y_last['year'])) + ')':>16s}")
+    print(f"  {'':30s} {str(int(y1['year'])):>16s}  {str(int(y_last['year'])):>16s}")
     print(f"  {'Assets (AVA)':30s} {_fmt_dollars(y1['ava']):>16s}  {_fmt_dollars(y_last['ava']):>16s}")
     print(f"  {'Assets (MVA)':30s} {_fmt_dollars(y1['mva']):>16s}  {_fmt_dollars(y_last['mva']):>16s}")
     print(f"  {'Liabilities (AAL)':30s} {_fmt_dollars(y1['aal']):>16s}  {_fmt_dollars(y_last['aal']):>16s}")
