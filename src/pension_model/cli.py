@@ -239,6 +239,22 @@ def _emit_truth_table(plan_name, liability, funding, constants, output_dir):
         xlsx_path = OUTPUT_BASE / "truth_tables.xlsx"
         upsert_sheet_to_excel(df, xlsx_path, f"{plan_name}_Py")
 
+        # Also refresh the R sheet and diff sheet from the R CSV
+        r_csv = OUTPUT_BASE / f"{plan_name}_R_truth_table.csv"
+        if r_csv.exists():
+            r_df = pd.read_csv(r_csv)
+            upsert_sheet_to_excel(r_df, xlsx_path, f"{plan_name}_R")
+            # Build side-by-side diff: year, then R/Py/diff for each metric
+            numeric_cols = [c for c in r_df.columns if c not in ("plan", "year")]
+            side_by_side = {"year": r_df["year"]}
+            for col in numeric_cols:
+                side_by_side[f"{col}_R"] = r_df[col]
+                side_by_side[f"{col}_Py"] = df[col] if col in df.columns else pd.NA
+                side_by_side[f"{col}_diff"] = (
+                    df[col] - r_df[col] if col in df.columns else pd.NA)
+            upsert_sheet_to_excel(
+                pd.DataFrame(side_by_side), xlsx_path, f"{plan_name}_diff")
+
         rel_csv = csv_path.relative_to(Path.cwd()) if csv_path.is_relative_to(Path.cwd()) else csv_path
         rel_xlsx = xlsx_path.relative_to(Path.cwd()) if xlsx_path.is_relative_to(Path.cwd()) else xlsx_path
         print(f"    {rel_csv}")
