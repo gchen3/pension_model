@@ -20,13 +20,22 @@ Columns (column-naming conventions):
   payroll_fy             — total DB+DC+CB payroll during fiscal year
   benefits_fy            — total benefit payments (DB + CB) during fiscal year
   aal_boy                — actuarial accrued liability (DB + CB, excludes DC) at BOY
-  er_cont_fy             — employer contributions (DB + DC) during fiscal year
+  er_db_cont_fy          — employer DB contributions (normal cost + amortization) during FY
+  er_dc_cont_fy          — employer DC contributions during FY
+  er_cont_fy             — total employer contributions (DB + DC) during fiscal year
   ee_cont_fy             — employee contributions during fiscal year
+  refunds_fy             — refund payments to terminated members during fiscal year
   mva_boy                — market value of assets at BOY
-  invest_income_fy       — investment income during fiscal year (AVA basis, R's exp_inv_earnings)
+  invest_income_fy       — actual investment income during fiscal year (MVA basis)
   ava_boy                — actuarial value of assets at BOY
   fr_mva_boy             — funded ratio = MVA / AAL at BOY
   fr_ava_boy             — funded ratio = AVA / AAL at BOY
+
+  admin_exp_fy           — administrative expenses during fiscal year
+
+MVA balance identity (should hold to float precision):
+  mva_boy[t+1] = mva_boy[t] + er_db_cont_fy + ee_cont_fy + invest_income_fy
+                 - benefits_fy - refunds_fy - admin_exp_fy
 
 Missing values are reported as pandas NA and will round-trip as empty cells in
 both CSV and Excel.
@@ -50,14 +59,34 @@ TRUTH_TABLE_COLUMNS = [
     "payroll_fy",
     "benefits_fy",
     "aal_boy",
+    "er_db_cont_fy",
+    "er_dc_cont_fy",
     "er_cont_fy",
     "ee_cont_fy",
+    "refunds_fy",
+    "admin_exp_fy",
     "mva_boy",
     "invest_income_fy",
     "ava_boy",
     "fr_mva_boy",
     "fr_ava_boy",
 ]
+
+import numpy as np
+
+
+def _actual_invest_income(mva, net_cf):
+    """Compute actual investment income from the MVA roll-forward.
+
+    Row i's FY flows roll MVA from row i-1 to row i, so:
+      invest_income[i] = mva[i] - mva[i-1] - net_cf[i]   (for i >= 1)
+    Row 0 is the init year — set to 0 (no prior MVA to compare against).
+    """
+    n = len(mva)
+    result = np.zeros(n)
+    for i in range(1, n):
+        result[i] = mva[i] - mva[i - 1] - net_cf[i]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +116,10 @@ def build_r_truth_table_frs(baseline_dir: Path) -> pd.DataFrame:
         col = liab["total_n_active"].values
         n_active = col if n_active is None else n_active + col
 
+    net_cf = f["net_cf_legacy"].values + f["net_cf_new"].values
+    mva = f["total_mva"].values
+    invest_income = _actual_invest_income(mva, net_cf)
+
     df = pd.DataFrame({
         "plan": "frs",
         "year": f["year"].astype(int).values,
@@ -96,12 +129,16 @@ def build_r_truth_table_frs(baseline_dir: Path) -> pd.DataFrame:
         "payroll_fy": f["total_payroll"].values,
         "benefits_fy": f["total_ben_payment"].values,
         "aal_boy": f["total_aal"].values,
+        "er_db_cont_fy": f["total_er_db_cont"].values,
+        "er_dc_cont_fy": f["total_er_dc_cont"].values,
         "er_cont_fy": f["total_er_cont"].values,
         "ee_cont_fy": (f["ee_nc_cont_legacy"].values
                        + f["ee_nc_cont_new"].values),
-        "mva_boy": f["total_mva"].values,
-        "invest_income_fy": (f["exp_inv_earnings_ava_legacy"].values
-                             + f["exp_inv_earnings_ava_new"].values),
+        "refunds_fy": f["total_refund"].values,
+        "admin_exp_fy": (f["admin_exp_legacy"].values
+                         + f["admin_exp_new"].values),
+        "mva_boy": mva,
+        "invest_income_fy": invest_income,
         "ava_boy": f["total_ava"].values,
         "fr_mva_boy": f["fr_mva"].values,
         "fr_ava_boy": f["fr_ava"].values,
@@ -123,6 +160,14 @@ def build_r_truth_table_txtrs(trs_r_dir: Path) -> pd.DataFrame:
     liab = pd.read_csv(trs_r_dir / "baseline_fresh.csv")
     f = pd.read_csv(trs_r_dir / "funding_fresh.csv")
 
+    net_cf = f["net_cf_legacy"].fillna(0).values + f["net_cf_new"].fillna(0).values
+    mva = f["MVA"].values
+    invest_income = _actual_invest_income(mva, net_cf)
+
+    # TRS has no DC plan, so er_db_cont = er_cont and er_dc_cont = 0
+    er_cont = f["er_cont"].values
+    refunds = f["refund_legacy"].fillna(0).values + f["refund_new"].fillna(0).values
+
     df = pd.DataFrame({
         "plan": "txtrs",
         "year": f["fy"].astype(int).values,
@@ -130,15 +175,19 @@ def build_r_truth_table_txtrs(trs_r_dir: Path) -> pd.DataFrame:
         "n_retired_boy": pd.NA,
         "n_inactive_boy": pd.NA,
         "payroll_fy": f["payroll"].values,
-        "benefits_fy": (f["ben_payment_legacy"].values
-                        + f["ben_payment_new"].values),
+        "benefits_fy": (f["ben_payment_legacy"].fillna(0).values
+                        + f["ben_payment_new"].fillna(0).values),
         "aal_boy": f["AAL"].values,
-        "er_cont_fy": f["er_cont"].values,
-        "ee_cont_fy": (f["ee_nc_cont_legacy"].values
-                       + f["ee_nc_cont_new"].values),
-        "mva_boy": f["MVA"].values,
-        "invest_income_fy": (f["exp_inv_income_legacy"].values
-                             + f["exp_inv_income_new"].values),
+        "er_db_cont_fy": er_cont,
+        "er_dc_cont_fy": 0.0,
+        "er_cont_fy": er_cont,
+        "ee_cont_fy": (f["ee_nc_cont_legacy"].fillna(0).values
+                       + f["ee_nc_cont_new"].fillna(0).values),
+        "refunds_fy": refunds,
+        "admin_exp_fy": (f["admin_exp_legacy"].fillna(0).values
+                         + f["admin_exp_new"].fillna(0).values),
+        "mva_boy": mva,
+        "invest_income_fy": invest_income,
         "ava_boy": f["AVA"].values,
         "fr_mva_boy": f["FR_MVA"].values,
         "fr_ava_boy": f["FR_AVA"].values,
@@ -188,6 +237,10 @@ def _build_python_truth_table_frs(liability, funding, constants) -> pd.DataFrame
         col = liability[cn]["total_n_active"].values
         n_active = col if n_active is None else n_active + col
 
+    net_cf = f["net_cf_legacy"].values + f["net_cf_new"].values
+    mva = f["total_mva"].values
+    invest_income = _actual_invest_income(mva, net_cf)
+
     df = pd.DataFrame({
         "plan": "frs",
         "year": f["year"].astype(int).values,
@@ -197,12 +250,16 @@ def _build_python_truth_table_frs(liability, funding, constants) -> pd.DataFrame
         "payroll_fy": f["total_payroll"].values,
         "benefits_fy": f["total_ben_payment"].values,
         "aal_boy": f["total_aal"].values,
+        "er_db_cont_fy": f["total_er_db_cont"].values,
+        "er_dc_cont_fy": f["total_er_dc_cont"].values,
         "er_cont_fy": f["total_er_cont"].values,
         "ee_cont_fy": (f["ee_nc_cont_legacy"].values
                        + f["ee_nc_cont_new"].values),
-        "mva_boy": f["total_mva"].values,
-        "invest_income_fy": (f["exp_inv_earnings_ava_legacy"].values
-                             + f["exp_inv_earnings_ava_new"].values),
+        "refunds_fy": f["total_refund"].values,
+        "admin_exp_fy": (f["admin_exp_legacy"].values
+                         + f["admin_exp_new"].values),
+        "mva_boy": mva,
+        "invest_income_fy": invest_income,
         "ava_boy": f["total_ava"].values,
         "fr_mva_boy": f["fr_mva"].values,
         "fr_ava_boy": f["fr_ava"].values,
@@ -246,11 +303,27 @@ def _build_python_truth_table_txtrs(liability, funding, _constants) -> pd.DataFr
     ee_cont = (ee_leg + ee_new) if ee_leg is not None and ee_new is not None \
               else col(f, "total_ee_nc_cont")
 
-    inv_leg = col(f, "exp_inv_income_legacy")
-    inv_new = col(f, "exp_inv_income_new")
-    invest_income = None
-    if inv_leg is not None and inv_new is not None:
-        invest_income = inv_leg + inv_new
+    ref_leg = col(f, "refund_legacy")
+    ref_new = col(f, "refund_new")
+    refunds = (ref_leg + ref_new) if ref_leg is not None and ref_new is not None \
+              else col(f, "total_refund")
+
+    adm_leg = col(f, "admin_exp_legacy")
+    adm_new = col(f, "admin_exp_new")
+    admin_exp = (adm_leg + adm_new) if adm_leg is not None and adm_new is not None \
+                else None
+
+    # Actual investment income from MVA roll-forward
+    net_cf_leg = col(f, "net_cf_legacy")
+    net_cf_new = col(f, "net_cf_new")
+    if mva is not None and net_cf_leg is not None and net_cf_new is not None:
+        invest_income = _actual_invest_income(mva, net_cf_leg + net_cf_new)
+    else:
+        invest_income = None
+
+    # TRS has no DC plan
+    er_db_cont = er_cont
+    er_dc_cont = np.zeros(len(year)) if year is not None else None
 
     n_active = col(liab, "total_n_active")
 
@@ -266,8 +339,12 @@ def _build_python_truth_table_txtrs(liability, funding, _constants) -> pd.DataFr
         "payroll_fy": payroll if payroll is not None else na_col,
         "benefits_fy": benefits if benefits is not None else na_col,
         "aal_boy": aal if aal is not None else na_col,
+        "er_db_cont_fy": er_db_cont if er_db_cont is not None else na_col,
+        "er_dc_cont_fy": er_dc_cont if er_dc_cont is not None else na_col,
         "er_cont_fy": er_cont if er_cont is not None else na_col,
         "ee_cont_fy": ee_cont if ee_cont is not None else na_col,
+        "refunds_fy": refunds if refunds is not None else na_col,
+        "admin_exp_fy": admin_exp if admin_exp is not None else na_col,
         "mva_boy": mva if mva is not None else na_col,
         "invest_income_fy": invest_income if invest_income is not None else na_col,
         "ava_boy": ava if ava is not None else na_col,
@@ -337,6 +414,14 @@ def format_truth_table_for_log(df: pd.DataFrame, max_rows: int = 31) -> str:
     return "\n".join(lines)
 
 
+def _freeze_panes(ws, df):
+    """Freeze below header row and right of label columns (plan, year)."""
+    label_cols = sum(1 for c in df.columns if c in ("plan", "year"))
+    # +1 for the Excel 1-based index, +1 to freeze right of the last label col
+    col_letter = chr(ord("A") + label_cols)
+    ws.freeze_panes = f"{col_letter}2"
+
+
 def upsert_sheet_to_excel(df: pd.DataFrame, xlsx_path: Path, sheet_name: str) -> None:
     """Write `df` to `sheet_name` in `xlsx_path`, creating the file if needed
     and preserving any other sheets that already exist.
@@ -352,9 +437,11 @@ def upsert_sheet_to_excel(df: pd.DataFrame, xlsx_path: Path, sheet_name: str) ->
             mode="a", if_sheet_exists="replace",
         ) as w:
             df.to_excel(w, sheet_name=sheet_name, index=False)
+            _freeze_panes(w.sheets[sheet_name], df)
     else:
         with pd.ExcelWriter(xlsx_path, engine="openpyxl") as w:
             df.to_excel(w, sheet_name=sheet_name, index=False)
+            _freeze_panes(w.sheets[sheet_name], df)
 
 
 # ---------------------------------------------------------------------------
