@@ -753,13 +753,15 @@ def compute_funding_trs(
     surcharge_ramp_end = surcharge_cfg.get("ramp_end_year", 0)
     extra_er_start_year = stat_rates.get("extra_er_start_year", 9999)
 
-    # nc_cal from model inputs (additional calibration beyond cal_factor)
-    nc_cal = funding_raw.get("nc_cal", 1.0)
-    # Try class_data if not in funding
-    if nc_cal == 1.0 and hasattr(constants, "class_data") and "all" in constants.class_data:
+    # nc_cal: authoritative source is calibration.json (class_data), with
+    # funding_raw as legacy fallback
+    nc_cal = 1.0
+    if hasattr(constants, "class_data") and "all" in constants.class_data:
         cd = constants.class_data["all"]
         if hasattr(cd, "nc_cal") and cd.nc_cal != 1.0:
             nc_cal = cd.nc_cal
+    if nc_cal == 1.0:
+        nc_cal = funding_raw.get("nc_cal", 1.0)
 
     # --- Initialize DataFrame from initial funding row ---
     # Normalize column names to lowercase with total_ prefix for aggregates

@@ -786,23 +786,20 @@ def _check_reduce_condition(cond: dict, dist_age: int, yos: int,
 def _lookup_reduce_table(table, table_key: str, dist_age: int, yos: int) -> float:
     """Look up reduction factor from a DataFrame table."""
     if "gft" in table_key.lower():
-        # GFT table indexed by (yos, age)
+        # GFT table indexed by (yos, age) — columns are integer ages
         row = table[table["yos"] == yos]
         if row.empty:
             row = table[table["yos"] <= yos].tail(1)
         if row.empty:
             return float("nan")
-        # Find age column
         age_cols = [c for c in table.columns if c != "yos"]
-        age_col = str(int(dist_age)) if str(int(dist_age)) in [str(c) for c in age_cols] else None
+        age_col = int(dist_age) if int(dist_age) in age_cols else None
         if age_col is None:
-            # Closest age
-            int_cols = [int(float(c)) for c in age_cols if str(c).replace(".", "").isdigit()]
+            int_cols = [c for c in age_cols if isinstance(c, (int, float))]
             if int_cols:
-                closest = min(int_cols, key=lambda x: abs(x - dist_age))
-                age_col = str(closest)
+                age_col = min(int_cols, key=lambda x: abs(x - dist_age))
         if age_col is not None:
-            val = row.iloc[0].get(int(age_col), row.iloc[0].get(float(age_col), float("nan")))
+            val = row.iloc[0][age_col]
             if val is not None and not (isinstance(val, float) and val != val):
                 return float(val)
         return float("nan")

@@ -376,8 +376,7 @@ def _build_trs_style_decrements(
         gft = pd.read_csv(gft_path)
         # Pivot back to wide format expected by get_reduce_factor
         gft_wide = gft.pivot(index="yos", columns="age", values="reduce_factor").reset_index()
-        gft_wide.columns = ["yos"] + [f"age_{int(c)}" if c != "yos" else c
-                                       for c in gft_wide.columns[1:]]
+        gft_wide.columns = ["yos"] + [int(c) for c in gft_wide.columns[1:]]
 
         others = pd.read_csv(others_path)
         others = others[["age", "reduce_factor"]]

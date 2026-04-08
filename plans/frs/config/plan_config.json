@@ -20,7 +20,6 @@
   "benefit": {
     "db_ee_cont_rate": 0.03,
     "db_ee_interest_rate": 0.0,
-    "cal_factor": 0.9,
     "retire_refund_ratio": 1.0,
     "fas_years_default": 5,
     "benefit_types": ["db", "dc"],

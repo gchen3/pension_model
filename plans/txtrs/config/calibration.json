@@ -1,13 +1,13 @@
 {
   "description": "Calibration factors for Texas TRS pension model",
   "source": "Computed to match TRS valuation report (from R model TxTRS_model_inputs.R)",
-  "notes": "cal_factor = 12.1 / 12.189475 adjusts DB benefits to match plan's PVFB. nc_cal = 12.1 / 12.1117 fine-tunes normal cost. pvfb_term_current = val's AAL - model's AAL.",
+  "notes": "cal_factor = 12.1 / 12.189475 adjusts DB benefits to match plan's PVFB. nc_cal = 12.1 / 12.1117 fine-tunes normal cost. pvfb_term_current = val's AAL - model's AAL. Full-precision values match R model (TxTRS_model_inputs.R lines 104-105).",
 
-  "cal_factor": 0.9926585,
+  "cal_factor": 0.9926596510514193,
 
   "classes": {
     "all": {
-      "nc_cal": 0.9990343,
+      "nc_cal": 0.9990339919251632,
       "pvfb_term_current": 10455928420
     }
   }

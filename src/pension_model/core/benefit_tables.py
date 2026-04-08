@@ -629,7 +629,8 @@ def build_ann_factor_table(
     term_year_arr = ey_arr + yos_arr
 
     # --- 3. Vectorized tier-at-dist-age resolution (integer) ---
-    tid_da, rs_da = _resolve_tiers_int(constants, cn_arr, ey_arr, dist_age_arr, yos_arr)
+    tid_da, rs_da = _resolve_tiers_int(constants, cn_arr, ey_arr, dist_age_arr, yos_arr,
+                                        entry_age=ea_arr)
 
     # --- 4. Discount rate (single value across all current plans) ---
     dr_arr = np.full(len(dist_age_arr), econ.dr_current, dtype=np.float64)

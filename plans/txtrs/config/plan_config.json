@@ -20,7 +20,6 @@
   "benefit": {
     "db_ee_cont_rate": 0.0825,
     "db_ee_interest_rate": 0.02,
-    "cal_factor": 0.9926585,
     "retire_refund_ratio": 0.3,
     "fas_years_default": 5,
     "fas_years_grandfathered": 3,
@@ -67,7 +66,6 @@
     },
     "public_edu_payroll_percent": 0.588,
     "extra_er_stat_cont": 0.0,
-    "nc_cal": 0.9990343,
     "statutory_rates": {
       "ee_rate_schedule": [
         {"from_year": 0, "rate": 0.08},

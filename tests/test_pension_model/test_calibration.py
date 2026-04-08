@@ -28,10 +28,14 @@ def calibration_results():
         build_targets_from_config, run_calibration,
     )
 
-    # Neutral calibration: passing a non-existent calibration path makes
-    # load_plan_config skip calibration loading, so nc_cal defaults to 1.0
-    # and pvfb_term_current to 0.0 for every class.
-    constants = load_frs_config(calibration_path=Path("__no_calibration__"))
+    # Load with calibration file to get cal_factor (a calibration parameter,
+    # not plan design), but neutralize nc_cal and pvfb_term_current so the
+    # calibration module re-derives them from scratch.
+    constants = load_frs_config()
+    # Reset per-class calibration values to neutral in the underlying dict
+    for cn in constants.calibration:
+        constants.calibration[cn]["nc_cal"] = 1.0
+        constants.calibration[cn]["pvfb_term_current"] = 0.0
     targets = build_targets_from_config(constants)
 
     liability = run_plan_pipeline(constants)
