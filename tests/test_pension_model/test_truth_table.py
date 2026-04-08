@@ -1,9 +1,7 @@
 """
 Truth table tests: verify Python-side truth table construction produces
-valid DataFrames with the canonical column set and reasonable values.
-
-These tests serve as a regression safety net — if pipeline output structure
-changes, truth table construction should still work.
+valid DataFrames with the canonical column set, reasonable values, and
+a balancing MVA identity.
 """
 
 import pytest
@@ -49,9 +47,9 @@ def test_frs_truth_table_plan_column(frs_truth_table):
 
 
 def test_frs_truth_table_no_nan_in_required(frs_truth_table):
-    """Required columns (not n_retired/n_inactive) should have no NaN."""
-    required = ["year", "n_active_boy", "payroll_fy", "benefits_fy",
-                "aal_boy", "er_cont_fy", "mva_boy", "ava_boy",
+    """Required columns should have no NaN."""
+    required = ["year", "n_active_boy", "payroll", "benefits",
+                "aal_boy", "mva_boy", "mva_eoy", "ava_boy",
                 "fr_mva_boy", "fr_ava_boy"]
     for col in required:
         assert frs_truth_table[col].notna().all(), f"{col} has NaN values"
@@ -59,7 +57,7 @@ def test_frs_truth_table_no_nan_in_required(frs_truth_table):
 
 def test_frs_truth_table_positive_values(frs_truth_table):
     """Key financial columns should be positive."""
-    for col in ["payroll_fy", "aal_boy", "mva_boy", "ava_boy"]:
+    for col in ["payroll", "aal_boy", "mva_boy", "ava_boy"]:
         vals = frs_truth_table[col].dropna()
         assert (vals > 0).all(), f"{col} has non-positive values"
 
@@ -70,6 +68,18 @@ def test_frs_truth_table_funded_ratio_bounded(frs_truth_table):
         vals = frs_truth_table[col].dropna()
         assert (vals > 0).all(), f"{col} has non-positive values"
         assert (vals < 2).all(), f"{col} has values >= 200%"
+
+
+def test_frs_mva_balance(frs_truth_table):
+    """mva_eoy should equal next row's mva_boy (MVA balance identity)."""
+    tt = frs_truth_table
+    for i in range(len(tt) - 1):
+        mva_eoy = tt.iloc[i]["mva_eoy"]
+        mva_boy_next = tt.iloc[i + 1]["mva_boy"]
+        assert abs(mva_eoy - mva_boy_next) < 1.0, (
+            f"Year {int(tt.iloc[i]['year'])}: mva_eoy={mva_eoy:.0f} != "
+            f"next mva_boy={mva_boy_next:.0f}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +97,6 @@ def txtrs_truth_table():
     liability = run_plan_pipeline(constants)
     funding_dir = constants.resolve_data_dir() / "funding"
     funding_inputs = load_funding_inputs(funding_dir)
-    # TRS funding takes the single-class DataFrame, not the dict
     first_class = list(constants.classes)[0]
     funding = compute_funding_trs(liability[first_class], funding_inputs, constants)
     return build_python_truth_table("txtrs", liability, funding, constants)
@@ -110,8 +119,8 @@ def test_txtrs_truth_table_plan_column(txtrs_truth_table):
 
 def test_txtrs_truth_table_no_nan_in_required(txtrs_truth_table):
     """Required columns should have no NaN."""
-    required = ["year", "n_active_boy", "payroll_fy", "benefits_fy",
-                "aal_boy", "er_cont_fy", "mva_boy", "ava_boy",
+    required = ["year", "n_active_boy", "payroll", "benefits",
+                "aal_boy", "mva_boy", "mva_eoy", "ava_boy",
                 "fr_mva_boy", "fr_ava_boy"]
     for col in required:
         assert txtrs_truth_table[col].notna().all(), f"{col} has NaN values"
@@ -119,7 +128,7 @@ def test_txtrs_truth_table_no_nan_in_required(txtrs_truth_table):
 
 def test_txtrs_truth_table_positive_values(txtrs_truth_table):
     """Key financial columns should be positive."""
-    for col in ["payroll_fy", "aal_boy", "mva_boy", "ava_boy"]:
+    for col in ["payroll", "aal_boy", "mva_boy", "ava_boy"]:
         vals = txtrs_truth_table[col].dropna()
         assert (vals > 0).all(), f"{col} has non-positive values"
 
@@ -130,3 +139,15 @@ def test_txtrs_truth_table_funded_ratio_bounded(txtrs_truth_table):
         vals = txtrs_truth_table[col].dropna()
         assert (vals > 0).all(), f"{col} has non-positive values"
         assert (vals < 2).all(), f"{col} has values >= 200%"
+
+
+def test_txtrs_mva_balance(txtrs_truth_table):
+    """mva_eoy should equal next row's mva_boy (MVA balance identity)."""
+    tt = txtrs_truth_table
+    for i in range(len(tt) - 1):
+        mva_eoy = tt.iloc[i]["mva_eoy"]
+        mva_boy_next = tt.iloc[i + 1]["mva_boy"]
+        assert abs(mva_eoy - mva_boy_next) < 1.0, (
+            f"Year {int(tt.iloc[i]['year'])}: mva_eoy={mva_eoy:.0f} != "
+            f"next mva_boy={mva_boy_next:.0f}"
+        )

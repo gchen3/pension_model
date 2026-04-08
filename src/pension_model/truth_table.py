@@ -12,30 +12,47 @@ Two views of the same data live side by side in an Excel workbook:
 - `frs_Py`, `txtrs_Py`: overwritten by each Python pipeline run (via the CLI),
   so flipping between tabs gives a direct visual diff
 
-Columns (column-naming conventions):
-  year                   — plan fiscal year
-  n_active_boy           — active headcount at beginning of year
-  n_retired_boy          — retired headcount at beginning of year (NA if not available)
-  n_inactive_boy         — terminated-vested headcount at beginning of year (NA if not available)
-  payroll_fy             — total DB+DC+CB payroll during fiscal year
-  benefits_fy            — total benefit payments (DB + CB) during fiscal year
-  aal_boy                — actuarial accrued liability (DB + CB, excludes DC) at BOY
-  er_db_cont_fy          — employer DB contributions (normal cost + amortization) during FY
-  er_dc_cont_fy          — employer DC contributions during FY
-  er_cont_fy             — total employer contributions (DB + DC) during fiscal year
-  ee_cont_fy             — employee contributions during fiscal year
-  refunds_fy             — refund payments to terminated members during fiscal year
-  mva_boy                — market value of assets at BOY
-  invest_income_fy       — actual investment income during fiscal year (MVA basis)
-  ava_boy                — actuarial value of assets at BOY
-  fr_mva_boy             — funded ratio = MVA / AAL at BOY
-  fr_ava_boy             — funded ratio = AVA / AAL at BOY
+Column layout — organized so the MVA balance identity is visible:
 
-  admin_exp_fy           — administrative expenses during fiscal year
+  BALANCES
+    mva_boy              — market value of DB assets at beginning of year
 
-MVA balance identity (should hold to float precision):
-  mva_boy[t+1] = mva_boy[t] + er_db_cont_fy + ee_cont_fy + invest_income_fy
-                 - benefits_fy - refunds_fy - admin_exp_fy
+  INFLOWS (into DB fund)
+    er_db_cont           — employer DB contributions (normal cost + amortization;
+                           includes DROP employer contributions for FRS)
+    ee_cont              — employee contributions
+    invest_income        — actual investment income earned on MVA
+
+  OUTFLOWS (from DB fund)
+    benefits             — benefit payments (includes DROP benefit payments for FRS)
+    refunds              — refund payments to terminated members
+    admin_exp            — administrative expenses
+
+  RESULT
+    mva_eoy              — end-of-year MVA; equals next row's mva_boy.
+                           For projected years (not the init row):
+                           mva_eoy = mva_boy + er_db_cont + ee_cont + invest_income
+                                     - benefits - refunds - admin_exp
+
+  OTHER BALANCES
+    aal_boy              — actuarial accrued liability at BOY
+    ava_boy              — actuarial value of assets at BOY
+    fr_mva_boy           — funded ratio = mva_boy / aal_boy
+    fr_ava_boy           — funded ratio = ava_boy / aal_boy
+
+  DEMOGRAPHICS
+    n_active_boy         — active member headcount at BOY
+    payroll              — total payroll during fiscal year
+    er_cont_total        — total employer contributions (DB + DC), for reference
+
+Note: DC employer contributions (er_dc_cont) are not in the MVA balance because
+DC money is paid directly to member accounts and never flows through the DB fund.
+For FRS, DROP flows are included in the aggregate er_db_cont and benefits columns.
+
+MVA balance identity (holds to float precision for all rows except the last):
+    mva_eoy = mva_boy + er_db_cont + ee_cont + invest_income
+              - benefits - refunds - admin_exp
+    mva_eoy should equal next row's mva_boy.
 
 Missing values are reported as pandas NA and will round-trip as empty cells in
 both CSV and Excel.
@@ -52,40 +69,49 @@ import pandas as pd
 # Canonical column order for every truth table (R and Python, FRS and TRS).
 TRUTH_TABLE_COLUMNS = [
     "plan",
+    # --- Balances ---
     "year",
-    "n_active_boy",
-    "n_retired_boy",
-    "n_inactive_boy",
-    "payroll_fy",
-    "benefits_fy",
-    "aal_boy",
-    "er_db_cont_fy",
-    "er_dc_cont_fy",
-    "er_cont_fy",
-    "ee_cont_fy",
-    "refunds_fy",
-    "admin_exp_fy",
     "mva_boy",
-    "invest_income_fy",
+    # --- Inflows (to DB fund) ---
+    "er_db_cont",
+    "ee_cont",
+    "invest_income",
+    # --- Outflows (from DB fund) ---
+    "benefits",
+    "refunds",
+    "admin_exp",
+    # --- Result: mva_eoy = mva_boy + inflows - outflows ---
+    "mva_eoy",
+    # --- Other balances ---
+    "aal_boy",
     "ava_boy",
     "fr_mva_boy",
     "fr_ava_boy",
+    # --- Demographics ---
+    "n_active_boy",
+    "payroll",
+    "er_cont_total",
 ]
 
 import numpy as np
 
 
 def _actual_invest_income(mva, net_cf):
-    """Compute actual investment income from the MVA roll-forward.
+    """Compute actual investment income so the MVA balance identity holds.
 
-    Row i's FY flows roll MVA from row i-1 to row i, so:
-      invest_income[i] = mva[i] - mva[i-1] - net_cf[i]   (for i >= 1)
-    Row 0 is the init year — set to 0 (no prior MVA to compare against).
+    The truth table identity is:
+      mva_boy[i+1] = mva_boy[i] + er_db_cont[i] + ee_cont[i]
+                     + invest_income[i] - benefits[i] - refunds[i] - admin[i]
+
+    Since net_cf[i] = er_db_cont[i] + ee_cont[i] - benefits[i] - refunds[i] - admin[i],
+    this reduces to: invest_income[i] = mva_boy[i+1] - mva_boy[i] - net_cf[i]
+
+    The last row gets 0 (no mva_boy[n] to compare against).
     """
     n = len(mva)
     result = np.zeros(n)
-    for i in range(1, n):
-        result[i] = mva[i] - mva[i - 1] - net_cf[i]
+    for i in range(n - 1):
+        result[i] = mva[i + 1] - mva[i] - net_cf[i]
     return result
 
 
@@ -119,29 +145,30 @@ def build_r_truth_table_frs(baseline_dir: Path) -> pd.DataFrame:
     net_cf = f["net_cf_legacy"].values + f["net_cf_new"].values
     mva = f["total_mva"].values
     invest_income = _actual_invest_income(mva, net_cf)
+    ee = f["ee_nc_cont_legacy"].values + f["ee_nc_cont_new"].values
+    er_db = f["total_er_db_cont"].values
+    benefits = f["total_ben_payment"].values
+    refunds = f["total_refund"].values
+    admin = f["admin_exp_legacy"].values + f["admin_exp_new"].values
 
     df = pd.DataFrame({
         "plan": "frs",
         "year": f["year"].astype(int).values,
-        "n_active_boy": n_active,
-        "n_retired_boy": pd.NA,
-        "n_inactive_boy": pd.NA,
-        "payroll_fy": f["total_payroll"].values,
-        "benefits_fy": f["total_ben_payment"].values,
-        "aal_boy": f["total_aal"].values,
-        "er_db_cont_fy": f["total_er_db_cont"].values,
-        "er_dc_cont_fy": f["total_er_dc_cont"].values,
-        "er_cont_fy": f["total_er_cont"].values,
-        "ee_cont_fy": (f["ee_nc_cont_legacy"].values
-                       + f["ee_nc_cont_new"].values),
-        "refunds_fy": f["total_refund"].values,
-        "admin_exp_fy": (f["admin_exp_legacy"].values
-                         + f["admin_exp_new"].values),
         "mva_boy": mva,
-        "invest_income_fy": invest_income,
+        "er_db_cont": er_db,
+        "ee_cont": ee,
+        "invest_income": invest_income,
+        "benefits": benefits,
+        "refunds": refunds,
+        "admin_exp": admin,
+        "mva_eoy": mva + net_cf + invest_income,
+        "aal_boy": f["total_aal"].values,
         "ava_boy": f["total_ava"].values,
         "fr_mva_boy": f["fr_mva"].values,
         "fr_ava_boy": f["fr_ava"].values,
+        "n_active_boy": n_active,
+        "payroll": f["total_payroll"].values,
+        "er_cont_total": f["total_er_cont"].values,
     })
     return df[TRUTH_TABLE_COLUMNS]
 
@@ -163,34 +190,30 @@ def build_r_truth_table_txtrs(trs_r_dir: Path) -> pd.DataFrame:
     net_cf = f["net_cf_legacy"].fillna(0).values + f["net_cf_new"].fillna(0).values
     mva = f["MVA"].values
     invest_income = _actual_invest_income(mva, net_cf)
-
-    # TRS has no DC plan, so er_db_cont = er_cont and er_dc_cont = 0
-    er_cont = f["er_cont"].values
+    er_db = f["er_cont"].values  # TRS has no DC plan
+    ee = f["ee_nc_cont_legacy"].fillna(0).values + f["ee_nc_cont_new"].fillna(0).values
+    benefits = f["ben_payment_legacy"].fillna(0).values + f["ben_payment_new"].fillna(0).values
     refunds = f["refund_legacy"].fillna(0).values + f["refund_new"].fillna(0).values
+    admin = f["admin_exp_legacy"].fillna(0).values + f["admin_exp_new"].fillna(0).values
 
     df = pd.DataFrame({
         "plan": "txtrs",
         "year": f["fy"].astype(int).values,
-        "n_active_boy": liab["n.active"].values,
-        "n_retired_boy": pd.NA,
-        "n_inactive_boy": pd.NA,
-        "payroll_fy": f["payroll"].values,
-        "benefits_fy": (f["ben_payment_legacy"].fillna(0).values
-                        + f["ben_payment_new"].fillna(0).values),
-        "aal_boy": f["AAL"].values,
-        "er_db_cont_fy": er_cont,
-        "er_dc_cont_fy": 0.0,
-        "er_cont_fy": er_cont,
-        "ee_cont_fy": (f["ee_nc_cont_legacy"].fillna(0).values
-                       + f["ee_nc_cont_new"].fillna(0).values),
-        "refunds_fy": refunds,
-        "admin_exp_fy": (f["admin_exp_legacy"].fillna(0).values
-                         + f["admin_exp_new"].fillna(0).values),
         "mva_boy": mva,
-        "invest_income_fy": invest_income,
+        "er_db_cont": er_db,
+        "ee_cont": ee,
+        "invest_income": invest_income,
+        "benefits": benefits,
+        "refunds": refunds,
+        "admin_exp": admin,
+        "mva_eoy": mva + net_cf + invest_income,
+        "aal_boy": f["AAL"].values,
         "ava_boy": f["AVA"].values,
         "fr_mva_boy": f["FR_MVA"].values,
         "fr_ava_boy": f["FR_AVA"].values,
+        "n_active_boy": liab["n.active"].values,
+        "payroll": f["payroll"].values,
+        "er_cont_total": er_db,  # same as er_db for TRS (no DC)
     })
     return df[TRUTH_TABLE_COLUMNS]
 
@@ -240,116 +263,88 @@ def _build_python_truth_table_frs(liability, funding, constants) -> pd.DataFrame
     net_cf = f["net_cf_legacy"].values + f["net_cf_new"].values
     mva = f["total_mva"].values
     invest_income = _actual_invest_income(mva, net_cf)
+    ee = f["ee_nc_cont_legacy"].values + f["ee_nc_cont_new"].values
+    er_db = f["total_er_db_cont"].values
+    benefits = f["total_ben_payment"].values
+    refunds = f["total_refund"].values
+    admin = f["admin_exp_legacy"].values + f["admin_exp_new"].values
 
     df = pd.DataFrame({
         "plan": "frs",
         "year": f["year"].astype(int).values,
-        "n_active_boy": n_active,
-        "n_retired_boy": pd.NA,
-        "n_inactive_boy": pd.NA,
-        "payroll_fy": f["total_payroll"].values,
-        "benefits_fy": f["total_ben_payment"].values,
-        "aal_boy": f["total_aal"].values,
-        "er_db_cont_fy": f["total_er_db_cont"].values,
-        "er_dc_cont_fy": f["total_er_dc_cont"].values,
-        "er_cont_fy": f["total_er_cont"].values,
-        "ee_cont_fy": (f["ee_nc_cont_legacy"].values
-                       + f["ee_nc_cont_new"].values),
-        "refunds_fy": f["total_refund"].values,
-        "admin_exp_fy": (f["admin_exp_legacy"].values
-                         + f["admin_exp_new"].values),
         "mva_boy": mva,
-        "invest_income_fy": invest_income,
+        "er_db_cont": er_db,
+        "ee_cont": ee,
+        "invest_income": invest_income,
+        "benefits": benefits,
+        "refunds": refunds,
+        "admin_exp": admin,
+        "mva_eoy": mva + net_cf + invest_income,
+        "aal_boy": f["total_aal"].values,
         "ava_boy": f["total_ava"].values,
         "fr_mva_boy": f["fr_mva"].values,
         "fr_ava_boy": f["fr_ava"].values,
+        "n_active_boy": n_active,
+        "payroll": f["total_payroll"].values,
+        "er_cont_total": f["total_er_cont"].values,
     })
     return df[TRUTH_TABLE_COLUMNS]
 
 
 def _build_python_truth_table_txtrs(liability, funding, _constants) -> pd.DataFrame:
     """TRS: funding is a single DataFrame; liability['all'] is the per-class frame."""
-    # TRS funding columns use uppercase AAL/MVA/AVA naming
     f = funding
     liab = liability["all"]
 
-    # Find the right column names in a case-insensitive way
-    def col(df, *options, default=None):
+    def col(df, *options):
         for o in options:
             if o in df.columns:
                 return df[o].values
-        return default
+        return None
 
-    # Prefer "year" over "fy": the Python TRS funding_df populates "year" in
-    # all rows but only writes "fy" to row 0 (an initial-row artifact). R's
-    # funding_fresh.csv uses "fy" exclusively, so the R builder takes that path.
+    def _sum(a, b):
+        if a is not None and b is not None:
+            return a + b
+        return a if a is not None else b
+
     year = col(f, "year")
-    aal = col(f, "total_aal")
     mva = col(f, "total_mva")
-    ava = col(f, "total_ava")
-    payroll = col(f, "total_payroll")
-    fr_mva = col(f, "fr_mva")
-    fr_ava = col(f, "fr_ava")
-    er_cont = col(f, "total_er_cont")
+    er_db = col(f, "total_er_cont")  # TRS has no DC
+    ee = _sum(col(f, "ee_nc_cont_legacy"), col(f, "ee_nc_cont_new"))
+    benefits = _sum(col(f, "ben_payment_legacy"), col(f, "ben_payment_new"))
+    if benefits is None:
+        benefits = col(f, "total_ben_payment")
+    refunds = _sum(col(f, "refund_legacy"), col(f, "refund_new"))
+    if refunds is None:
+        refunds = col(f, "total_refund")
+    admin = _sum(col(f, "admin_exp_legacy"), col(f, "admin_exp_new"))
+    net_cf = _sum(col(f, "net_cf_legacy"), col(f, "net_cf_new"))
 
-    # Benefits and ee contributions may be split by legacy/new
-    ben_leg = col(f, "ben_payment_legacy")
-    ben_new = col(f, "ben_payment_new")
-    benefits = (ben_leg + ben_new) if ben_leg is not None and ben_new is not None \
-               else col(f, "total_ben_payment")
+    invest_income = _actual_invest_income(mva, net_cf) if mva is not None and net_cf is not None else None
 
-    ee_leg = col(f, "ee_nc_cont_legacy")
-    ee_new = col(f, "ee_nc_cont_new")
-    ee_cont = (ee_leg + ee_new) if ee_leg is not None and ee_new is not None \
-              else col(f, "total_ee_nc_cont")
+    n = len(year) if year is not None else len(liab)
+    z = np.zeros(n)
 
-    ref_leg = col(f, "refund_legacy")
-    ref_new = col(f, "refund_new")
-    refunds = (ref_leg + ref_new) if ref_leg is not None and ref_new is not None \
-              else col(f, "total_refund")
-
-    adm_leg = col(f, "admin_exp_legacy")
-    adm_new = col(f, "admin_exp_new")
-    admin_exp = (adm_leg + adm_new) if adm_leg is not None and adm_new is not None \
-                else None
-
-    # Actual investment income from MVA roll-forward
-    net_cf_leg = col(f, "net_cf_legacy")
-    net_cf_new = col(f, "net_cf_new")
-    if mva is not None and net_cf_leg is not None and net_cf_new is not None:
-        invest_income = _actual_invest_income(mva, net_cf_leg + net_cf_new)
-    else:
-        invest_income = None
-
-    # TRS has no DC plan
-    er_db_cont = er_cont
-    er_dc_cont = np.zeros(len(year)) if year is not None else None
-
-    n_active = col(liab, "total_n_active")
-
-    n_rows = len(year) if year is not None else len(liab)
-    na_col = [pd.NA] * n_rows
+    _or_z = lambda x: x if x is not None else z
 
     df = pd.DataFrame({
         "plan": "txtrs",
-        "year": pd.Series(year).astype(int).values if year is not None else na_col,
-        "n_active_boy": n_active if n_active is not None else na_col,
-        "n_retired_boy": na_col,
-        "n_inactive_boy": na_col,
-        "payroll_fy": payroll if payroll is not None else na_col,
-        "benefits_fy": benefits if benefits is not None else na_col,
-        "aal_boy": aal if aal is not None else na_col,
-        "er_db_cont_fy": er_db_cont if er_db_cont is not None else na_col,
-        "er_dc_cont_fy": er_dc_cont if er_dc_cont is not None else na_col,
-        "er_cont_fy": er_cont if er_cont is not None else na_col,
-        "ee_cont_fy": ee_cont if ee_cont is not None else na_col,
-        "refunds_fy": refunds if refunds is not None else na_col,
-        "admin_exp_fy": admin_exp if admin_exp is not None else na_col,
-        "mva_boy": mva if mva is not None else na_col,
-        "invest_income_fy": invest_income if invest_income is not None else na_col,
-        "ava_boy": ava if ava is not None else na_col,
-        "fr_mva_boy": fr_mva if fr_mva is not None else na_col,
-        "fr_ava_boy": fr_ava if fr_ava is not None else na_col,
+        "year": pd.Series(year).astype(int).values,
+        "mva_boy": mva,
+        "er_db_cont": _or_z(er_db),
+        "ee_cont": _or_z(ee),
+        "invest_income": _or_z(invest_income),
+        "benefits": _or_z(benefits),
+        "refunds": _or_z(refunds),
+        "admin_exp": _or_z(admin),
+        "mva_eoy": _or_z(mva) + _or_z(net_cf) + _or_z(invest_income),
+        "aal_boy": col(f, "total_aal"),
+        "ava_boy": col(f, "total_ava"),
+        "fr_mva_boy": col(f, "fr_mva"),
+        "fr_ava_boy": col(f, "fr_ava"),
+        "n_active_boy": col(liab, "total_n_active"),
+        "payroll": col(f, "total_payroll"),
+        "er_cont_total": _or_z(er_db),  # same as er_db for TRS
     })
     return df[TRUTH_TABLE_COLUMNS]
 
@@ -382,10 +377,10 @@ def format_truth_table_for_log(df: pd.DataFrame, max_rows: int = 31) -> str:
         return f"{v * 100:>6.2f}%"
 
     header = (
-        f"  {'year':>4s} {'active':>8s} {'retired':>8s} {'inact':>8s} "
-        f"{'payroll':>10s} {'benefits':>10s} {'aal':>10s} "
-        f"{'er_cont':>10s} {'ee_cont':>10s} {'mva':>10s} "
-        f"{'inv_inc':>10s} {'ava':>10s} {'fr_mva':>7s} {'fr_ava':>7s}"
+        f"  {'year':>4s} {'mva_boy':>10s} {'er_db':>10s} {'ee':>10s} "
+        f"{'invest':>10s} {'benefits':>10s} {'refunds':>10s} {'admin':>10s} "
+        f"{'mva_eoy':>10s} {'aal_boy':>10s} {'fr_mva':>7s} {'fr_ava':>7s} "
+        f"{'active':>8s} {'payroll':>10s}"
     )
     sep = "  " + "-" * (len(header) - 2)
     lines = [header, sep]
@@ -393,24 +388,25 @@ def format_truth_table_for_log(df: pd.DataFrame, max_rows: int = 31) -> str:
     for _, row in df.iterrows():
         line = (
             f"  {int(row['year']):>4d} "
-            f"{_fmt_count(row['n_active_boy'])} "
-            f"{_fmt_count(row['n_retired_boy'])} "
-            f"{_fmt_count(row['n_inactive_boy'])} "
-            f"{_fmt_dollars(row['payroll_fy'])} "
-            f"{_fmt_dollars(row['benefits_fy'])} "
-            f"{_fmt_dollars(row['aal_boy'])} "
-            f"{_fmt_dollars(row['er_cont_fy'])} "
-            f"{_fmt_dollars(row['ee_cont_fy'])} "
             f"{_fmt_dollars(row['mva_boy'])} "
-            f"{_fmt_dollars(row['invest_income_fy'])} "
-            f"{_fmt_dollars(row['ava_boy'])} "
+            f"{_fmt_dollars(row['er_db_cont'])} "
+            f"{_fmt_dollars(row['ee_cont'])} "
+            f"{_fmt_dollars(row['invest_income'])} "
+            f"{_fmt_dollars(row['benefits'])} "
+            f"{_fmt_dollars(row['refunds'])} "
+            f"{_fmt_dollars(row['admin_exp'])} "
+            f"{_fmt_dollars(row['mva_eoy'])} "
+            f"{_fmt_dollars(row['aal_boy'])} "
             f"{_fmt_pct(row['fr_mva_boy'])} "
-            f"{_fmt_pct(row['fr_ava_boy'])}"
+            f"{_fmt_pct(row['fr_ava_boy'])} "
+            f"{_fmt_count(row['n_active_boy'])} "
+            f"{_fmt_dollars(row['payroll'])}"
         )
         lines.append(line)
 
     lines.append("")
     lines.append("  (dollar amounts in millions; funded ratios as percentages)")
+    lines.append("  mva_eoy = mva_boy + er_db + ee + invest - benefits - refunds - admin")
     return "\n".join(lines)
 
 
