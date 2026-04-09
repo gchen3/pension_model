@@ -278,6 +278,14 @@ def _execute_pipeline(constants):
         load_funding_inputs, run_funding_model,
     )
 
+    # Fail fast if required data files are missing
+    missing = constants.validate_data_files()
+    if missing:
+        raise FileNotFoundError(
+            f"Missing required data files for plan '{constants.plan_name}':\n"
+            + "\n".join(f"  - {p}" for p in missing)
+        )
+
     print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
     liability = run_plan_pipeline(constants, progress=True)
 
@@ -367,11 +375,11 @@ def cmd_calibrate(args):
     constants = load_plan_config(config_path, calibration_path=Path("__no_calibration__"))
     cal_factor = constants.benefit.cal_factor
 
-    # Build calibration targets from config's acfr_data
+    # Build calibration targets from config's valuation_inputs
     targets = build_targets_from_config(constants)
     if not targets:
-        print(f"  No calibration targets found in acfr_data for {plan_name!r}.")
-        print(f"  Each class needs val_norm_cost and val_aal in acfr_data.")
+        print(f"  No calibration targets found in valuation_inputs for {plan_name!r}.")
+        print(f"  Each class needs val_norm_cost and val_aal in valuation_inputs.")
         sys.exit(1)
 
     # Run pipeline with neutral calibration

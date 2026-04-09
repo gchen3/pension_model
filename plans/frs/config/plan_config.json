@@ -243,11 +243,11 @@
     }
   },
 
-  "acfr_data_notes": {
+  "valuation_inputs_notes": {
     "ben_payment": "Initial-year pension benefit payments to current retirees. Derived as: per-class ACFR outflow * plan-wide ben_payment_ratio (0.935839). The ratio comes from ACFR totals: pension_payment / (pension_payment + contribution_refunds + disbursement_to_ip + admin_expense) = 11,944,986,866 / 12,763,932,044. See GH issue for investigation of whether this derivation is correct."
   },
 
-  "acfr_data": {
+  "valuation_inputs": {
     "regular": {
       "ben_payment": 8391759183.371059,
       "retiree_pop": 393308,

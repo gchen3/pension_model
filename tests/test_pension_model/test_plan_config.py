@@ -36,7 +36,7 @@ class TestPlanConfigLoad:
         assert not frs_config.is_special("regular")
 
     def test_frs_acfr(self, frs_config):
-        acfr = frs_config.get_acfr("regular")
+        acfr = frs_config.get_class_inputs("regular")
         assert abs(acfr["ben_payment"] - 8_391_759_183.37) < 1.0
         assert acfr["val_norm_cost"] == 0.0896
         # Calibration should be applied

@@ -98,7 +98,7 @@ class PlanConfig:
     plan_design_defs: dict
 
     # Per-class ACFR data
-    acfr_data: Dict[str, dict]
+    valuation_inputs: Dict[str, dict]
 
     # Calibration (per-class nc_cal and pvfb_term_current)
     calibration: Dict[str, dict] = field(default_factory=dict)
@@ -271,7 +271,7 @@ class PlanConfig:
         Compatible with ModelConstants.class_data[cn].X access pattern.
         """
         result = {}
-        for cn, acfr in self.acfr_data.items():
+        for cn, acfr in self.valuation_inputs.items():
             cal = self.calibration.get(cn, {})
             result[cn] = SimpleNamespace(
                 ben_payment=acfr["ben_payment"],
@@ -363,9 +363,9 @@ class PlanConfig:
                 return td.get("fas_years", self.fas_years_default)
         return self.fas_years_default
 
-    def get_acfr(self, class_name: str) -> dict:
+    def get_class_inputs(self, class_name: str) -> dict:
         """Return ACFR data for a class (with calibration applied)."""
-        base = dict(self.acfr_data.get(class_name, {}))
+        base = dict(self.valuation_inputs.get(class_name, {}))
         cal = self.calibration.get(class_name, {})
         base["nc_cal"] = cal.get("nc_cal", 1.0)
         base["pvfb_term_current"] = cal.get("pvfb_term_current", 0.0)
@@ -381,10 +381,10 @@ class PlanConfig:
 
         # ben_payment: required per-class field — initial-year pension
         # payments to current retirees.
-        for cn, acfr in self.acfr_data.items():
+        for cn, acfr in self.valuation_inputs.items():
             if "ben_payment" not in acfr:
                 warnings.append(
-                    f"class '{cn}' is missing 'ben_payment' in acfr_data. "
+                    f"class '{cn}' is missing 'ben_payment' in valuation_inputs. "
                     f"This is the initial-year pension benefit payments to "
                     f"current retirees (used to seed the retiree liability "
                     f"projection)."
@@ -409,13 +409,32 @@ class PlanConfig:
                 "is not set. The profile salaries may not be scaled correctly."
             )
 
+        # Class coverage: every class in classes must have an valuation_inputs entry
+        for cn in self.classes:
+            if cn not in self.valuation_inputs:
+                warnings.append(
+                    f"class '{cn}' is listed in 'classes' but has no entry in "
+                    f"valuation_inputs. Required fields: ben_payment, retiree_pop, "
+                    f"total_active_member, val_norm_cost, val_aal."
+                )
+
+        # DC fields: if benefit_types includes "dc", each class needs er_dc_cont_rate
+        if "dc" in self.benefit_types:
+            for cn in self.classes:
+                acfr = self.valuation_inputs.get(cn, {})
+                if "er_dc_cont_rate" not in acfr:
+                    warnings.append(
+                        f"class '{cn}' is missing 'er_dc_cont_rate' in valuation_inputs "
+                        f"but benefit_types includes 'dc'."
+                    )
+
         # Grouped headcount: check that group members share total_active_member
-        for cn, acfr in self.acfr_data.items():
+        for cn, acfr in self.valuation_inputs.items():
             hcg = acfr.get("headcount_group")
             if hcg and len(hcg) > 1:
                 target = acfr["total_active_member"]
                 for peer in hcg:
-                    peer_acfr = self.acfr_data.get(peer, {})
+                    peer_acfr = self.valuation_inputs.get(peer, {})
                     peer_target = peer_acfr.get("total_active_member")
                     if peer_target != target:
                         warnings.append(
@@ -426,6 +445,61 @@ class PlanConfig:
                         break
 
         return warnings
+
+    def validate_data_files(self) -> list:
+        """Check that required data files exist for this plan.
+
+        Call early (before running the pipeline) to fail fast with a clear
+        message listing all missing files, rather than crashing mid-pipeline.
+        """
+        missing = []
+        data_dir = self.resolve_data_dir()
+
+        # Per-class demographic files
+        demo_dir = data_dir / "demographics"
+        for cn in self.classes:
+            for suffix in ("headcount", "salary"):
+                # Try class-prefixed, then unprefixed (single-class plans)
+                prefixed = demo_dir / f"{cn}_{suffix}.csv"
+                unprefixed = demo_dir / f"{suffix}.csv"
+                if not prefixed.exists() and not unprefixed.exists():
+                    missing.append(str(prefixed))
+
+        # Salary growth: per-class or shared
+        has_any_sg = False
+        for cn in self.classes:
+            if (demo_dir / f"{cn}_salary_growth.csv").exists():
+                has_any_sg = True
+                break
+        if not has_any_sg and not (demo_dir / "salary_growth.csv").exists():
+            missing.append(str(demo_dir / "salary_growth.csv"))
+
+        # Retiree distribution
+        if not (demo_dir / "retiree_distribution.csv").exists():
+            missing.append(str(demo_dir / "retiree_distribution.csv"))
+
+        # Decrement files: per-class or shared
+        decr_dir = data_dir / "decrements"
+        for cn in self.classes:
+            for suffix in ("termination_rates", "retirement_rates"):
+                prefixed = decr_dir / f"{cn}_{suffix}.csv"
+                unprefixed = decr_dir / f"{suffix}.csv"
+                if not prefixed.exists() and not unprefixed.exists():
+                    missing.append(str(prefixed))
+
+        # Mortality
+        mort_dir = data_dir / "mortality"
+        for f in ("base_rates.csv", "improvement_scale.csv"):
+            if not (mort_dir / f).exists():
+                missing.append(str(mort_dir / f))
+
+        # Funding
+        fund_dir = data_dir / "funding"
+        for f in ("init_funding.csv", "return_scenarios.csv"):
+            if not (fund_dir / f).exists():
+                missing.append(str(fund_dir / f))
+
+        return missing
 
 
 # ---------------------------------------------------------------------------
@@ -1508,7 +1582,7 @@ def load_plan_config(config_path: Path,
         benefit_mult_defs=raw.get("benefit_multipliers", {}),
         plan_design_defs=raw.get("plan_design", {}),
 
-        acfr_data=raw.get("acfr_data", {}),
+        valuation_inputs=raw.get("valuation_inputs", {}),
         calibration=calibration,
 
         _class_to_group=class_to_group,

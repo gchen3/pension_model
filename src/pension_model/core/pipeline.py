@@ -50,12 +50,12 @@ def compute_adjustment_ratio(class_name: str, headcount: pd.DataFrame,
     """Compute headcount adjustment ratio matching R model.
 
     For grouped classes (where ``headcount_group`` lists peer classes in
-    ``acfr_data``), the denominator is the combined raw headcount across
+    ``valuation_inputs``), the denominator is the combined raw headcount across
     the group.  The target comes from ``total_active_member`` in the
-    class's ``acfr_data`` entry (which should be set to the group total
+    class's ``valuation_inputs`` entry (which should be set to the group total
     for every member of the group).
     """
-    acfr = constants.acfr_data.get(class_name, {})
+    acfr = constants.valuation_inputs.get(class_name, {})
     target = constants.class_data[class_name].total_active_member
     hc_group = acfr.get("headcount_group")
     if hc_group and len(hc_group) > 1:

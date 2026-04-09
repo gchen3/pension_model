@@ -118,15 +118,15 @@ def load_targets_from_init_funding(
 
 
 def build_targets_from_config(constants) -> Dict[str, CalibrationTargets]:
-    """Build calibration targets from plan config's acfr_data.
+    """Build calibration targets from plan config's valuation_inputs.
 
-    Requires each class entry in acfr_data to have at least ``val_norm_cost``
+    Requires each class entry in valuation_inputs to have at least ``val_norm_cost``
     and ``val_aal``.  Works for any plan.
     """
     targets = {}
-    acfr = constants.acfr_data
+    vi = constants.valuation_inputs
     for cn in constants.classes:
-        entry = acfr.get(cn, {})
+        entry = vi.get(cn, {})
         vnc = entry.get("val_norm_cost")
         val_aal = entry.get("val_aal")
         if vnc is None or val_aal is None:
