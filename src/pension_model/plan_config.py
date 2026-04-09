@@ -10,12 +10,15 @@ Loads plan_config.json and provides:
 """
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +384,61 @@ class PlanConfig:
         base["nc_cal"] = cal.get("nc_cal", 1.0)
         base["pvfb_term_current"] = cal.get("pvfb_term_current", 0.0)
         return base
+
+    def validate(self) -> list:
+        """Check config for common issues; return list of warning strings.
+
+        Intended for third-plan authors: flags non-obvious defaults,
+        missing optional fields, and structural inconsistencies.
+        """
+        warnings = []
+
+        # ben_payment_ratio_components: if absent, ben_payment_ratio=1.0
+        # (all outflow treated as pension payments). Flag for awareness.
+        if self.raw.get("ben_payment_ratio_components") is None:
+            warnings.append(
+                "ben_payment_ratio_components not set; defaulting to 1.0 "
+                "(all outflow treated as pension payments). Provide this "
+                "field if the plan has refunds, IP disbursements, or admin "
+                "expense paid from the trust."
+            )
+
+        # Calibration: warn if any class has nc_cal far from 1.0
+        for cn, cal in self.calibration.items():
+            nc_cal = cal.get("nc_cal", 1.0)
+            if nc_cal < 0.8 or nc_cal > 1.2:
+                warnings.append(
+                    f"class '{cn}' has nc_cal={nc_cal:.3f} (outside 0.8-1.2 range). "
+                    f"This may indicate data or assumption issues."
+                )
+
+        # Entrant profile: check if file exists or will be derived
+        data_dir = self.resolve_data_dir()
+        has_explicit_ep = (data_dir / "demographics" / "entrant_profile.csv").exists()
+        uses_start_year = self.entrant_salary_at_start_year
+        if has_explicit_ep and not uses_start_year:
+            warnings.append(
+                "entrant_profile.csv exists but entrant_salary_at_start_year "
+                "is not set. The profile salaries may not be scaled correctly."
+            )
+
+        # Grouped headcount: check that group members share total_active_member
+        for cn, acfr in self.acfr_data.items():
+            hcg = acfr.get("headcount_group")
+            if hcg and len(hcg) > 1:
+                target = acfr["total_active_member"]
+                for peer in hcg:
+                    peer_acfr = self.acfr_data.get(peer, {})
+                    peer_target = peer_acfr.get("total_active_member")
+                    if peer_target != target:
+                        warnings.append(
+                            f"headcount_group mismatch: '{cn}' has total_active_member="
+                            f"{target} but peer '{peer}' has {peer_target}. "
+                            f"Grouped classes must share the same target."
+                        )
+                        break
+
+        return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -1472,6 +1530,9 @@ def load_plan_config(config_path: Path,
         _tier_id_to_cola_key=tier_id_to_cola_key,
         _tier_id_to_fas_years=tier_id_to_fas_years,
     )
+
+    for w in config.validate():
+        log.info("[%s config] %s", config.plan_name, w)
 
     return config
 

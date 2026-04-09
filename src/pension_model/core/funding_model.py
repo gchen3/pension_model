@@ -759,26 +759,8 @@ def compute_funding_trs(
         nc_cal = funding_raw.get("nc_cal", 1.0)
 
     # --- Initialize DataFrame from initial funding row ---
-    # Normalize column names to lowercase with total_ prefix for aggregates
-    _init_rename = {
-        "AAL": "total_aal", "AAL_legacy": "aal_legacy", "AAL_new": "aal_new",
-        "AVA": "total_ava", "AVA_legacy": "ava_legacy", "AVA_new": "ava_new",
-        "MVA": "total_mva", "MVA_legacy": "mva_legacy", "MVA_new": "mva_new",
-        "UAL_AVA": "total_ual_ava", "UAL_AVA_legacy": "ual_ava_legacy",
-        "UAL_AVA_new": "ual_ava_new",
-        "UAL_MVA": "total_ual_mva", "UAL_MVA_legacy": "ual_mva_legacy",
-        "UAL_MVA_new": "ual_mva_new", "UAL_MVA_real": "total_ual_mva_real",
-        "FR_AVA": "fr_ava", "FR_MVA": "fr_mva",
-        "ROA": "roa", "DR": "dr_legacy",
-        "exp_AVA_legacy": "exp_ava_legacy", "exp_AVA_new": "exp_ava_new",
-        "payroll": "total_payroll",
-        "er_cont": "total_er_cont", "er_cont_rate": "total_er_cont_rate",
-        "er_cont_real": "total_er_cont_real",
-    }
-    init = init.rename(index={k: v for k, v in _init_rename.items() if k in init.index})
-    # Lowercase any remaining mixed-case index entries
-    init = init.rename(index={k: k.lower() for k in init.index if k != k.lower()})
-
+    # Column names are expected to follow the standardized convention
+    # (lowercase, total_ prefix for aggregates). See plans/*/data/funding/.
     cols = list(init.index)
     f = pd.DataFrame(0.0, index=range(n_years), columns=cols)
     f["year"] = range(start_year, start_year + n_years)
@@ -786,12 +768,6 @@ def compute_funding_trs(
         if col != "year":
             val = init.get(col, 0)
             f.loc[0, col] = float(val if pd.notna(val) else 0)
-
-    # Rename 'fy' to 'year' if present
-    if "fy" in f.columns and "year" not in cols:
-        f["year"] = range(start_year, start_year + n_years)
-    elif "fy" in f.columns:
-        f.loc[:, "fy"] = f["year"]
 
     liab = liability_result
 
