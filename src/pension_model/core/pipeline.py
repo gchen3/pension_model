@@ -854,7 +854,7 @@ def _project_and_aggregate_class(
         class_name, constants)
 
     cd = constants.class_data[class_name]
-    ben_payment = cd.outflow * constants.ben_payment_ratio
+    ben_payment = cd.ben_payment
     retire_current = compute_current_retiree_liability(
         class_inputs["ann_factor_retire"], class_inputs["retiree_distribution"],
         cd.retiree_pop, ben_payment, constants)

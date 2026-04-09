@@ -244,9 +244,13 @@
     }
   },
 
+  "acfr_data_notes": {
+    "ben_payment": "Initial-year pension benefit payments to current retirees. Derived as: per-class ACFR outflow * plan-wide ben_payment_ratio (0.935839). The ratio comes from ACFR totals: pension_payment / (pension_payment + contribution_refunds + disbursement_to_ip + admin_expense) = 11,944,986,866 / 12,763,932,044. See GH issue for investigation of whether this derivation is correct."
+  },
+
   "acfr_data": {
     "regular": {
-      "outflow": 8967096000,
+      "ben_payment": 8391759183.371059,
       "retiree_pop": 393308,
       "total_active_member": 537128,
       "er_dc_cont_rate": 0.066,
@@ -255,7 +259,7 @@
       "val_payroll": 29126383663
     },
     "special": {
-      "outflow": 2423470000,
+      "ben_payment": 2267978019.653661,
       "retiree_pop": 41696,
       "total_active_member": 72925,
       "er_dc_cont_rate": 0.1654,
@@ -264,7 +268,7 @@
       "val_payroll": 5451709307
     },
     "admin": {
-      "outflow": 8090000,
+      "ben_payment": 7570938.439097,
       "retiree_pop": 160,
       "total_active_member": 104,
       "er_dc_cont_rate": 0.0843,
@@ -273,7 +277,7 @@
       "val_payroll": 5381322
     },
     "eco": {
-      "outflow": 9442000,
+      "ben_payment": 8836192.922367,
       "retiree_pop": 227,
       "total_active_member": 2075,
       "headcount_group": ["eco", "eso", "judges"],
@@ -283,7 +287,7 @@
       "val_payroll": 7973936
     },
     "eso": {
-      "outflow": 53526000,
+      "ben_payment": 50091724.461199,
       "retiree_pop": 1446,
       "total_active_member": 2075,
       "headcount_group": ["eco", "eso", "judges"],
@@ -293,7 +297,7 @@
       "val_payroll": 57226218
     },
     "judges": {
-      "outflow": 105844000,
+      "ben_payment": 99052955.271665,
       "retiree_pop": 989,
       "total_active_member": 2075,
       "headcount_group": ["eco", "eso", "judges"],
@@ -303,7 +307,7 @@
       "val_payroll": 146524097
     },
     "senior_management": {
-      "outflow": 338664000,
+      "ben_payment": 316935017.989902,
       "retiree_pop": 5828,
       "total_active_member": 7610,
       "er_dc_cont_rate": 0.0798,
@@ -337,12 +341,5 @@
     "eso": "general",
     "judges": "general",
     "senior_management": "general"
-  },
-
-  "ben_payment_ratio_components": {
-    "pension_payment": 11944986866,
-    "contribution_refunds": 28343757,
-    "disbursement_to_ip": 768106850,
-    "admin_expense": 22494571
   }
 }

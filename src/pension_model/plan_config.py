@@ -274,7 +274,7 @@ class PlanConfig:
         for cn, acfr in self.acfr_data.items():
             cal = self.calibration.get(cn, {})
             result[cn] = SimpleNamespace(
-                outflow=acfr["outflow"],
+                ben_payment=acfr["ben_payment"],
                 retiree_pop=acfr["retiree_pop"],
                 total_active_member=acfr["total_active_member"],
                 er_dc_cont_rate=acfr["er_dc_cont_rate"],
@@ -367,16 +367,6 @@ class PlanConfig:
                 return td.get("fas_years", self.fas_years_default)
         return self.fas_years_default
 
-    @property
-    def ben_payment_ratio(self) -> float:
-        """Computed from ACFR ben_payment_ratio_components if present."""
-        bpr = self.raw.get("ben_payment_ratio_components")
-        if bpr is None:
-            return 1.0
-        pp = bpr["pension_payment"]
-        total = pp + bpr["contribution_refunds"] + bpr["disbursement_to_ip"] + bpr["admin_expense"]
-        return pp / total
-
     def get_acfr(self, class_name: str) -> dict:
         """Return ACFR data for a class (with calibration applied)."""
         base = dict(self.acfr_data.get(class_name, {}))
@@ -393,15 +383,16 @@ class PlanConfig:
         """
         warnings = []
 
-        # ben_payment_ratio_components: if absent, ben_payment_ratio=1.0
-        # (all outflow treated as pension payments). Flag for awareness.
-        if self.raw.get("ben_payment_ratio_components") is None:
-            warnings.append(
-                "ben_payment_ratio_components not set; defaulting to 1.0 "
-                "(all outflow treated as pension payments). Provide this "
-                "field if the plan has refunds, IP disbursements, or admin "
-                "expense paid from the trust."
-            )
+        # ben_payment: required per-class field — initial-year pension
+        # payments to current retirees.
+        for cn, acfr in self.acfr_data.items():
+            if "ben_payment" not in acfr:
+                warnings.append(
+                    f"class '{cn}' is missing 'ben_payment' in acfr_data. "
+                    f"This is the initial-year pension benefit payments to "
+                    f"current retirees (used to seed the retiree liability "
+                    f"projection)."
+                )
 
         # Calibration: warn if any class has nc_cal far from 1.0
         for cn, cal in self.calibration.items():

@@ -37,14 +37,10 @@ class TestPlanConfigLoad:
 
     def test_frs_acfr(self, frs_config):
         acfr = frs_config.get_acfr("regular")
-        assert acfr["outflow"] == 8_967_096_000
+        assert abs(acfr["ben_payment"] - 8_391_759_183.37) < 1.0
         assert acfr["val_norm_cost"] == 0.0896
         # Calibration should be applied
         assert acfr["nc_cal"] != 1.0  # calibration loaded
-
-    def test_frs_ben_payment_ratio(self, frs_config):
-        bpr = frs_config.ben_payment_ratio
-        assert 0.9 < bpr < 1.0
 
     def test_txtrs_loads(self):
         from pension_model.plan_config import load_txtrs_config
