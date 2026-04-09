@@ -35,7 +35,6 @@
   },
 
   "funding": {
-    "model": "multi_class",
     "has_drop": true,
     "drop_reference_class": "regular",
     "policy": "statutory",

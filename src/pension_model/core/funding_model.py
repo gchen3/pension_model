@@ -1113,8 +1113,8 @@ def run_funding_model(
 ) -> dict:
     """Run the funding model for any plan.
 
-    Dispatches to the appropriate implementation based on
-    ``constants.funding_model`` (from config ``funding.model``).
+    Dispatches based on number of classes: single-class plans use the
+    gain/loss deferral model, multi-class plans use the corridor model.
 
     Args:
         liability_results: Dict mapping class_name -> liability DataFrame.
@@ -1127,8 +1127,7 @@ def run_funding_model(
         For single-class plans the dict has one entry keyed by the class name
         plus a plan_name aggregate key (same DataFrame).
     """
-    model = constants.funding_model
-    if model == "single_class":
+    if len(constants.classes) == 1:
         first_class = list(constants.classes)[0]
         df = compute_funding_trs(
             liability_results[first_class], funding_inputs, constants)

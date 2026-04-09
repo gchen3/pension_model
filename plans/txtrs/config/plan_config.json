@@ -52,7 +52,6 @@
   },
 
   "funding": {
-    "model": "single_class",
     "policy": "statutory",
     "amo_method": "level_pct",
     "amo_period_new": 30,

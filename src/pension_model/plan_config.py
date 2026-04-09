@@ -65,7 +65,6 @@ class PlanConfig:
     cola: dict
 
     # Funding
-    funding_model: str   # "multi_class" or "single_class" — selects funding implementation
     funding_policy: str
     amo_method: str
     amo_period_new: int
@@ -1557,7 +1556,6 @@ def load_plan_config(config_path: Path,
         cola=ben.get("cola", {}),
         cash_balance=ben.get("cash_balance"),
 
-        funding_model=fun["model"],
         funding_policy=fun["policy"],
         amo_method=fun["amo_method"],
         amo_period_new=fun["amo_period_new"],
