@@ -21,6 +21,7 @@ from pathlib import Path
 from pension_model.plan_config import PlanConfig
 from pension_model.core.pipeline import _get_pmt
 from pension_model.core._funding_helpers import (
+    _aal_rollforward,
     _ava_gain_loss_smoothing,
     _get_init_row,
     _lookup_rate_schedule,
@@ -297,12 +298,22 @@ def compute_funding(
             f.loc[i, "liability_gain_loss_legacy"] = liab["liability_gain_loss_legacy_est"].iloc[i] if "liability_gain_loss_legacy_est" in liab.columns else 0
             f.loc[i, "liability_gain_loss_new"] = liab["liability_gain_loss_new_est"].iloc[i] if "liability_gain_loss_new_est" in liab.columns else 0
 
-            f.loc[i, "aal_legacy"] = (f.loc[i - 1, "aal_legacy"] * (1 + dr_current)
-                + (f.loc[i, "nc_legacy"] - f.loc[i, "ben_payment_legacy"] - f.loc[i, "refund_legacy"]) * (1 + dr_current) ** 0.5
-                + f.loc[i, "liability_gain_loss_legacy"])
-            f.loc[i, "aal_new"] = (f.loc[i - 1, "aal_new"] * (1 + dr_new)
-                + (f.loc[i, "nc_new"] - f.loc[i, "ben_payment_new"] - f.loc[i, "refund_new"]) * (1 + dr_new) ** 0.5
-                + f.loc[i, "liability_gain_loss_new"])
+            f.loc[i, "aal_legacy"] = _aal_rollforward(
+                aal_prev=f.loc[i - 1, "aal_legacy"],
+                nc=f.loc[i, "nc_legacy"],
+                ben=f.loc[i, "ben_payment_legacy"],
+                refund=f.loc[i, "refund_legacy"],
+                liab_gl=f.loc[i, "liability_gain_loss_legacy"],
+                dr=dr_current,
+            )
+            f.loc[i, "aal_new"] = _aal_rollforward(
+                aal_prev=f.loc[i - 1, "aal_new"],
+                nc=f.loc[i, "nc_new"],
+                ben=f.loc[i, "ben_payment_new"],
+                refund=f.loc[i, "refund_new"],
+                liab_gl=f.loc[i, "liability_gain_loss_new"],
+                dr=dr_new,
+            )
             f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
 
             frs.loc[i, "aal_legacy"] += f.loc[i, "aal_legacy"]
@@ -793,14 +804,22 @@ def compute_funding_trs(
         f.loc[i, "liability_gain_loss"] = f.loc[i, "liability_gain_loss_legacy"] + f.loc[i, "liability_gain_loss_new"]
 
         # AAL roll-forward
-        f.loc[i, "aal_legacy"] = (
-            f.loc[i - 1, "aal_legacy"] * (1 + dr_current)
-            + (f.loc[i, "nc_legacy"] - f.loc[i, "ben_payment_legacy"] - f.loc[i, "refund_legacy"]) * (1 + dr_current) ** 0.5
-            + f.loc[i, "liability_gain_loss_legacy"])
-        f.loc[i, "aal_new"] = (
-            f.loc[i - 1, "aal_new"] * (1 + dr_new)
-            + (f.loc[i, "nc_new"] - f.loc[i, "ben_payment_new"] - f.loc[i, "refund_new"]) * (1 + dr_new) ** 0.5
-            + f.loc[i, "liability_gain_loss_new"])
+        f.loc[i, "aal_legacy"] = _aal_rollforward(
+            aal_prev=f.loc[i - 1, "aal_legacy"],
+            nc=f.loc[i, "nc_legacy"],
+            ben=f.loc[i, "ben_payment_legacy"],
+            refund=f.loc[i, "refund_legacy"],
+            liab_gl=f.loc[i, "liability_gain_loss_legacy"],
+            dr=dr_current,
+        )
+        f.loc[i, "aal_new"] = _aal_rollforward(
+            aal_prev=f.loc[i - 1, "aal_new"],
+            nc=f.loc[i, "nc_new"],
+            ben=f.loc[i, "ben_payment_new"],
+            refund=f.loc[i, "refund_new"],
+            liab_gl=f.loc[i, "liability_gain_loss_new"],
+            dr=dr_new,
+        )
         f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
 
         # NC rates

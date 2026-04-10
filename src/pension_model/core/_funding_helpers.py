@@ -116,6 +116,28 @@ def _ava_gain_loss_smoothing(
     }
 
 
+def _aal_rollforward(aal_prev, nc, ben, refund, liab_gl, dr):
+    """Roll the actuarial accrued liability forward one year.
+
+    Identical formula used by both the corridor (FRS) and gain/loss (TRS)
+    funding paths::
+
+        aal_t = aal_{t-1} * (1 + dr)
+              + (nc - ben - refund) * (1 + dr) ** 0.5
+              + liab_gl
+
+    The mid-year cashflow is brought forward at half a year of interest
+    via ``(1 + dr) ** 0.5``. **Always pass scalar** ``dr`` — never a
+    precomputed ``sqrt_factor`` — so the floating-point operations match
+    the original inline expression bit-for-bit (see bit-identity risk #1).
+    """
+    return (
+        aal_prev * (1 + dr)
+        + (nc - ben - refund) * (1 + dr) ** 0.5
+        + liab_gl
+    )
+
+
 def _lookup_rate_schedule(schedule: list, year: int) -> float:
     """Look up a rate from a year-based schedule.
 
