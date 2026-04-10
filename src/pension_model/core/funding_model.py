@@ -26,6 +26,7 @@ from pension_model.core._funding_helpers import (
     _get_init_row,
     _lookup_rate_schedule,
     _mva_rollforward,
+    _solvency_cont,
 )
 import math
 
@@ -438,8 +439,11 @@ def compute_funding(
                       + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
                       - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
 
-            f.loc[i, "total_solv_cont"] = max(
-                -(f.loc[i - 1, "total_mva"] * (1 + roa) + (cf_leg + cf_new) * (1 + roa) ** 0.5) / (1 + roa) ** 0.5, 0)
+            f.loc[i, "total_solv_cont"] = _solvency_cont(
+                mva_prev=f.loc[i - 1, "total_mva"],
+                cf_total=cf_leg + cf_new,
+                roa=roa,
+            )
             if f.loc[i, "total_aal"] > 0:
                 f.loc[i, "solv_cont_legacy"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
                 f.loc[i, "solv_cont_new"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
@@ -902,8 +906,11 @@ def compute_funding_trs(
                   - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
         cf_total = cf_legacy + cf_new
 
-        f.loc[i, "solv_cont"] = max(
-            -(f.loc[i - 1, "total_mva"] * (1 + roa) + cf_total * (1 + roa) ** 0.5) / (1 + roa) ** 0.5, 0)
+        f.loc[i, "solv_cont"] = _solvency_cont(
+            mva_prev=f.loc[i - 1, "total_mva"],
+            cf_total=cf_total,
+            roa=roa,
+        )
         if f.loc[i, "total_aal"] > 0:
             f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
             f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]

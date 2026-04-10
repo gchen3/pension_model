@@ -152,6 +152,28 @@ def _mva_rollforward(mva_prev, net_cf, roa):
     return mva_prev * (1 + roa) + net_cf * (1 + roa) ** 0.5
 
 
+def _solvency_cont(mva_prev, cf_total, roa):
+    """Solvency contribution: minimum cash needed to keep MVA non-negative.
+
+    Identical formula in both funding paths::
+
+        max(
+            -(mva_prev * (1 + roa) + cf_total * (1 + roa) ** 0.5)
+              / (1 + roa) ** 0.5,
+            0,
+        )
+
+    Pass scalar ``roa`` and pre-summed ``cf_total`` (the original FRS call
+    site computes ``cf_leg + cf_new`` inline; that addition produces an
+    identical float to the TRS pre-computed ``cf_total = cf_legacy +
+    cf_new``).
+    """
+    return max(
+        -(mva_prev * (1 + roa) + cf_total * (1 + roa) ** 0.5) / (1 + roa) ** 0.5,
+        0,
+    )
+
+
 def _lookup_rate_schedule(schedule: list, year: int) -> float:
     """Look up a rate from a year-based schedule.
 
