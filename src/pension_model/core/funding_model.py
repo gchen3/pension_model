@@ -26,6 +26,7 @@ from pension_model.core._funding_helpers import (
     _get_init_row,
     _lookup_rate_schedule,
     _mva_rollforward,
+    _roll_amort_layer,
     _solvency_cont,
 )
 import math
@@ -565,23 +566,16 @@ def compute_funding(
             amo = amo_tables[cn]
             mc = amo["max_col"]
 
-            cd, cp, cper = amo["cur_debt"], amo["cur_pay"], amo["cur_per"]
-            cd[i, 1:mc + 1] = cd[i - 1, :mc] * (1 + dr_current) - cp[i - 1, :mc] * (1 + dr_current) ** 0.5
-            cd[i, 0] = f.loc[i, "ual_ava_legacy"] - cd[i, 1:mc + 1].sum()
-            for j in range(mc):
-                if cper[i, j] > 0 and abs(cd[i, j]) > 1e-6:
-                    cp[i, j] = _get_pmt(dr_current, amo_pay_growth, int(cper[i, j]), cd[i, j], t=0.5)
-                else:
-                    cp[i, j] = 0
-
-            fd, fp, fper = amo["fut_debt"], amo["fut_pay"], amo["fut_per"]
-            fd[i, 1:mc + 1] = fd[i - 1, :mc] * (1 + dr_new) - fp[i - 1, :mc] * (1 + dr_new) ** 0.5
-            fd[i, 0] = f.loc[i, "ual_ava_new"] - fd[i, 1:mc + 1].sum()
-            for j in range(mc):
-                if fper[i, j] > 0 and abs(fd[i, j]) > 1e-6:
-                    fp[i, j] = _get_pmt(dr_new, amo_pay_growth, int(fper[i, j]), fd[i, j], t=0.5)
-                else:
-                    fp[i, j] = 0
+            _roll_amort_layer(
+                debt=amo["cur_debt"], pay=amo["cur_pay"], per=amo["cur_per"],
+                i=i, max_col=mc, ual=f.loc[i, "ual_ava_legacy"],
+                dr=dr_current, amo_pay_growth=amo_pay_growth,
+            )
+            _roll_amort_layer(
+                debt=amo["fut_debt"], pay=amo["fut_pay"], per=amo["fut_per"],
+                i=i, max_col=mc, ual=f.loc[i, "ual_ava_new"],
+                dr=dr_new, amo_pay_growth=amo_pay_growth,
+            )
 
         funding[agg_name] = frs
 
@@ -994,32 +988,18 @@ def compute_funding_trs(
         f.loc[i, "all_in_cost_real"] = f.loc[i, "cum_er_cont_real"] + f.loc[i, "total_ual_mva_real"]
 
         # Amortization layer updates — current hires (legacy)
-        for j in range(1, n_amo + 1):
-            if j <= n_amo:
-                debt_current[i, j] = (debt_current[i - 1, j - 1] * (1 + dr_current)
-                                      - pay_current[i - 1, j - 1] * (1 + dr_current) ** 0.5)
-        debt_current[i, 0] = f.loc[i, "ual_ava_legacy"] - debt_current[i, 1:n_amo + 1].sum()
-        for j in range(n_amo):
-            per = amo_per_current_diag[i, j]
-            if per > 0 and abs(debt_current[i, j]) > 1e-6:
-                pay_current[i, j] = _get_pmt(dr_current, amo_pay_growth, max(int(per), 1),
-                                              debt_current[i, j], t=0.5)
-            else:
-                pay_current[i, j] = 0
+        _roll_amort_layer(
+            debt=debt_current, pay=pay_current, per=amo_per_current_diag,
+            i=i, max_col=n_amo, ual=f.loc[i, "ual_ava_legacy"],
+            dr=dr_current, amo_pay_growth=amo_pay_growth,
+        )
 
         # Amortization layer updates — new hires
-        for j in range(1, n_amo + 1):
-            if j <= n_amo:
-                debt_new[i, j] = (debt_new[i - 1, j - 1] * (1 + dr_new)
-                                  - pay_new[i - 1, j - 1] * (1 + dr_new) ** 0.5)
-        debt_new[i, 0] = f.loc[i, "ual_ava_new"] - debt_new[i, 1:n_amo + 1].sum()
-        for j in range(n_amo):
-            per = amo_per_new[i, j]
-            if per > 0 and abs(debt_new[i, j]) > 1e-6:
-                pay_new[i, j] = _get_pmt(dr_new, amo_pay_growth, max(int(per), 1),
-                                          debt_new[i, j], t=0.5)
-            else:
-                pay_new[i, j] = 0
+        _roll_amort_layer(
+            debt=debt_new, pay=pay_new, per=amo_per_new,
+            i=i, max_col=n_amo, ual=f.loc[i, "ual_ava_new"],
+            dr=dr_new, amo_pay_growth=amo_pay_growth,
+        )
 
     return f
 

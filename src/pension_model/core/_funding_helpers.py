@@ -16,7 +16,10 @@ Bit-identity constraints (do not "simplify"):
 
 import math
 
+import numpy as np
 import pandas as pd
+
+from pension_model.core.pipeline import _get_pmt
 
 
 def _get_init_row(init_funding: pd.DataFrame, class_name: str) -> pd.Series:
@@ -172,6 +175,47 @@ def _solvency_cont(mva_prev, cf_total, roa):
         -(mva_prev * (1 + roa) + cf_total * (1 + roa) ** 0.5) / (1 + roa) ** 0.5,
         0,
     )
+
+
+def _roll_amort_layer(debt, pay, per, i, max_col, ual, dr, amo_pay_growth):
+    """Roll one set of amortization layers forward by one year (in place).
+
+    Operates on 2-D ndarrays indexed (year, layer):
+      * ``debt`` shape ``(n_years, max_col + 1)`` — column 0 is the new
+        layer formed at year ``i``, columns 1..max_col are existing
+        layers being rolled forward.
+      * ``pay``  shape ``(n_years, max_col)``   — amortization payments.
+      * ``per``  shape ``(n_years, max_col)``   — remaining period (yrs)
+        for each layer at each year.
+
+    Steps:
+      1. Roll existing layers forward with one year of interest, less
+         the prior year's payment accrued at half a year (mid-year).
+      2. Set layer 0 to the residual ``ual - sum(rolled layers)``.
+      3. Compute the new payment for each layer via ``_get_pmt``; layers
+         with no remaining period or negligible debt get zero payment.
+
+    Periods are non-negative integers in practice (CSV-loaded then
+    decremented by 1 each year), so ``int(per)`` truncation is exact.
+
+    Used by both the corridor (FRS) and gain/loss (TRS) funding paths;
+    each plan calls it twice per year (current/legacy + future/new
+    layer sets). The amort *table construction* (diagonal fill) is
+    intentionally NOT unified — see the build_amort_period_tables
+    helper and the TRS-side diagonal-shift code.
+    """
+    debt[i, 1:max_col + 1] = (
+        debt[i - 1, :max_col] * (1 + dr)
+        - pay[i - 1, :max_col] * (1 + dr) ** 0.5
+    )
+    debt[i, 0] = ual - debt[i, 1:max_col + 1].sum()
+    for j in range(max_col):
+        if per[i, j] > 0 and abs(debt[i, j]) > 1e-6:
+            pay[i, j] = _get_pmt(
+                dr, amo_pay_growth, int(per[i, j]), debt[i, j], t=0.5,
+            )
+        else:
+            pay[i, j] = 0
 
 
 def _lookup_rate_schedule(schedule: list, year: int) -> float:
