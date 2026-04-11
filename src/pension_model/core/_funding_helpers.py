@@ -253,6 +253,46 @@ def _populate_calibrated_nc_rates(f, liab, nc_cal, n_years):
         f.loc[1:, "nc_rate_cb_new"] = nc_new_cb[:-1]
 
 
+def _ava_corridor_smoothing(ava_prev, net_cf, mva, dr):
+    """Five-year corridor AVA smoothing (recognize 1/5 of gain/loss).
+
+    Used by the corridor (FRS-style) funding path *at the plan-aggregate
+    level*. The smoothed AVA is the prior AVA plus expected mid-year
+    investment income, plus 1/5 of the gap to MVA, then bounded to the
+    [80%, 120%] corridor around MVA::
+
+        exp_inv_earnings_ava = ava_prev * dr + net_cf * dr / 2
+        exp_ava              = ava_prev + net_cf + exp_inv_earnings_ava
+        ava_unbounded        = exp_ava + (mva - exp_ava) * 0.2
+        ava                  = clip(ava_unbounded, 0.8 * mva, 1.2 * mva)
+        alloc_inv_earnings_ava = ava - ava_prev - net_cf
+        ava_base             = ava_prev + net_cf / 2
+
+    Returned values match the column names written by the original
+    inline FRS smoothing block (legacy and new layers each get their
+    own call). ``ava_base`` is the per-leg base used to allocate the
+    plan-aggregate ``alloc_inv_earnings_ava`` to individual classes.
+    """
+    exp_inv_earnings_ava = ava_prev * dr + net_cf * dr / 2
+    exp_ava = ava_prev + net_cf + exp_inv_earnings_ava
+    ava = max(
+        min(
+            exp_ava + (mva - exp_ava) * 0.2,
+            mva * 1.2,
+        ),
+        mva * 0.8,
+    )
+    alloc_inv_earnings_ava = ava - ava_prev - net_cf
+    ava_base = ava_prev + net_cf / 2
+    return {
+        "exp_inv_earnings_ava": exp_inv_earnings_ava,
+        "exp_ava": exp_ava,
+        "ava": ava,
+        "alloc_inv_earnings_ava": alloc_inv_earnings_ava,
+        "ava_base": ava_base,
+    }
+
+
 def _lookup_rate_schedule(schedule: list, year: int) -> float:
     """Look up a rate from a year-based schedule.
 

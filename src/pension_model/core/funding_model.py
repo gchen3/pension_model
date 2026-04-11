@@ -22,6 +22,7 @@ from pension_model.plan_config import PlanConfig
 from pension_model.core.pipeline import _get_pmt
 from pension_model.core._funding_helpers import (
     _aal_rollforward,
+    _ava_corridor_smoothing,
     _ava_gain_loss_smoothing,
     _get_init_row,
     _lookup_rate_schedule,
@@ -466,21 +467,29 @@ def compute_funding(
             funding[cn] = f
 
         # --- AVA smoothing at plan aggregate level ---
-        frs.loc[i, "exp_inv_earnings_ava_legacy"] = frs.loc[i - 1, "ava_legacy"] * dr_current + frs.loc[i, "net_cf_legacy"] * dr_current / 2
-        frs.loc[i, "exp_ava_legacy"] = frs.loc[i - 1, "ava_legacy"] + frs.loc[i, "net_cf_legacy"] + frs.loc[i, "exp_inv_earnings_ava_legacy"]
-        frs.loc[i, "ava_legacy"] = max(min(
-            frs.loc[i, "exp_ava_legacy"] + (frs.loc[i, "mva_legacy"] - frs.loc[i, "exp_ava_legacy"]) * 0.2,
-            frs.loc[i, "mva_legacy"] * 1.2), frs.loc[i, "mva_legacy"] * 0.8)
-        frs.loc[i, "alloc_inv_earnings_ava_legacy"] = frs.loc[i, "ava_legacy"] - frs.loc[i - 1, "ava_legacy"] - frs.loc[i, "net_cf_legacy"]
-        frs.loc[i, "ava_base_legacy"] = frs.loc[i - 1, "ava_legacy"] + frs.loc[i, "net_cf_legacy"] / 2
+        ava_leg = _ava_corridor_smoothing(
+            ava_prev=frs.loc[i - 1, "ava_legacy"],
+            net_cf=frs.loc[i, "net_cf_legacy"],
+            mva=frs.loc[i, "mva_legacy"],
+            dr=dr_current,
+        )
+        frs.loc[i, "exp_inv_earnings_ava_legacy"] = ava_leg["exp_inv_earnings_ava"]
+        frs.loc[i, "exp_ava_legacy"] = ava_leg["exp_ava"]
+        frs.loc[i, "ava_legacy"] = ava_leg["ava"]
+        frs.loc[i, "alloc_inv_earnings_ava_legacy"] = ava_leg["alloc_inv_earnings_ava"]
+        frs.loc[i, "ava_base_legacy"] = ava_leg["ava_base"]
 
-        frs.loc[i, "exp_inv_earnings_ava_new"] = frs.loc[i - 1, "ava_new"] * dr_new + frs.loc[i, "net_cf_new"] * dr_new / 2
-        frs.loc[i, "exp_ava_new"] = frs.loc[i - 1, "ava_new"] + frs.loc[i, "net_cf_new"] + frs.loc[i, "exp_inv_earnings_ava_new"]
-        frs.loc[i, "ava_new"] = max(min(
-            frs.loc[i, "exp_ava_new"] + (frs.loc[i, "mva_new"] - frs.loc[i, "exp_ava_new"]) * 0.2,
-            frs.loc[i, "mva_new"] * 1.2), frs.loc[i, "mva_new"] * 0.8)
-        frs.loc[i, "alloc_inv_earnings_ava_new"] = frs.loc[i, "ava_new"] - frs.loc[i - 1, "ava_new"] - frs.loc[i, "net_cf_new"]
-        frs.loc[i, "ava_base_new"] = frs.loc[i - 1, "ava_new"] + frs.loc[i, "net_cf_new"] / 2
+        ava_new = _ava_corridor_smoothing(
+            ava_prev=frs.loc[i - 1, "ava_new"],
+            net_cf=frs.loc[i, "net_cf_new"],
+            mva=frs.loc[i, "mva_new"],
+            dr=dr_new,
+        )
+        frs.loc[i, "exp_inv_earnings_ava_new"] = ava_new["exp_inv_earnings_ava"]
+        frs.loc[i, "exp_ava_new"] = ava_new["exp_ava"]
+        frs.loc[i, "ava_new"] = ava_new["ava"]
+        frs.loc[i, "alloc_inv_earnings_ava_new"] = ava_new["alloc_inv_earnings_ava"]
+        frs.loc[i, "ava_base_new"] = ava_new["ava_base"]
 
         # --- Allocate AVA earnings to classes ---
         for cn in all_classes:
