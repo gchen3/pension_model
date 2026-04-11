@@ -236,60 +236,121 @@ class GainLossSmoothing:
 
 @runtime_checkable
 class ContributionStrategy(Protocol):
-    """Computes employer normal-cost and amortization rates / amounts
-    for one class-year inside the funding loop.
+    """Computes the per-class employer NC, EE, and amortization rate
+    columns for one year inside the funding loop.
 
     Implementations differ on:
 
-      * Whether the employer normal-cost rate is the calibrated rate
-        pre-populated from the liability pipeline (Actuarial), or the
-        difference between a dynamically-computed total NC rate and an
-        EE rate (Statutory).
-      * Whether the amortization rate is a function of prior amort
-        table payments (Actuarial), or the residual of an externally-
-        set statutory effective rate (Statutory, when
+      * Whether the employer normal-cost rate is computed from the
+        calibrated NC rates pre-populated by
+        ``_populate_calibrated_nc_rates`` (Actuarial), or from a
+        statutory rate cascade (Statutory).
+      * Whether the amortization rate is a function of the prior
+        year's amort-table payments (Actuarial), or the residual of an
+        externally-set statutory effective rate (Statutory, when
         ``funding_policy == "statutory"``).
-      * Whether a statutory rate cascade exists at all.
 
-    Concrete impls fill in the body in Step 10 of the unification
-    refactor; this Protocol is a documentation contract only.
+    The contract is to write these eight columns to ``f.loc[i, :]``::
+
+        nc_rate_legacy, nc_rate_new
+        ee_nc_rate_legacy, ee_nc_rate_new
+        er_nc_rate_legacy, er_nc_rate_new
+        amo_rate_legacy, amo_rate_new
+
+    ``StatutoryContributions`` additionally writes
+    ``er_stat_base_rate``, ``public_edu_surcharge_rate``,
+    ``er_stat_extra_rate``, and ``er_stat_eff_rate`` (the rate
+    cascade). Plans whose frames don't have those columns must not
+    instantiate ``StatutoryContributions``.
+
+    Contribution *amounts* (rate × payroll), DC contributions, admin
+    expenses, and aggregate accumulation are NOT the strategy's job —
+    they're computed at the call site after this method runs.
     """
 
-    def compute_year(
+    def compute_rates(
         self,
         f: pd.DataFrame,
         i: int,
         year: int,
         amo_state: dict,
     ) -> None:
-        """Write contribution rate and amount columns to ``f.loc[i, :]``.
-
-        ``amo_state`` carries any per-class amortization state the
-        strategy needs (debt/pay/per arrays for the actuarial path).
-        """
+        """Write the eight rate columns (legacy + new) to ``f.loc[i, :]``."""
         ...
 
 
+def _payroll_new_denom(f: pd.DataFrame, i: int) -> float:
+    """Return the appropriate denominator for ``nc_rate_new``.
+
+    For cash-balance plans (TRS-style), the new-hire normal-cost rate
+    is divided by ``payroll_db_new + payroll_cb_new``; for plans
+    without a cash-balance leg the denominator is just ``payroll_db_new``.
+    Schema-driven via the presence of the ``payroll_cb_new`` column on
+    the funding frame, the same way ``_populate_calibrated_nc_rates``
+    decides whether to write the CB normal-cost rate column.
+    """
+    if "payroll_cb_new" in f.columns:
+        return f.loc[i, "payroll_db_new"] + f.loc[i, "payroll_cb_new"]
+    return f.loc[i, "payroll_db_new"]
+
+
 class ActuarialContributions:
-    """Employer contributions driven by the actuarial pipeline.
+    """Employer contributions driven by the calibrated actuarial pipeline.
 
-    The employer normal-cost rate is read from the calibrated columns
-    pre-populated by ``_populate_calibrated_nc_rates``; the
-    amortization rate is computed from the prior year's amort table
-    payments divided by payroll. There is no statutory rate cascade.
+    The employer normal-cost rate is the calibrated total NC rate
+    minus a flat employee contribution rate; the amortization rate is
+    computed from the prior year's amort-table payments divided by
+    payroll. There is no statutory rate cascade.
 
-    Body filled in by Step 10.
+    The amort-table payment arrays are looked up via
+    ``amo_state["cur_pay"]`` and ``amo_state["fut_pay"]``; both are
+    expected to be 2-D ndarrays indexed (year, layer) and the row at
+    ``i - 1`` is summed to get the payment total for the legacy /
+    new layer respectively.
     """
 
-    def compute_year(
+    def __init__(self, db_ee_cont_rate: float) -> None:
+        self.db_ee_cont_rate = db_ee_cont_rate
+
+    def compute_rates(
         self,
         f: pd.DataFrame,
         i: int,
         year: int,
         amo_state: dict,
     ) -> None:
-        raise NotImplementedError(
-            "ActuarialContributions.compute_year is filled in by Step 10."
+        ee_rate = self.db_ee_cont_rate
+        payroll_db_legacy = f.loc[i, "payroll_db_legacy"]
+        payroll_new_denom = _payroll_new_denom(f, i)
+
+        # Total NC rates
+        f.loc[i, "nc_rate_legacy"] = (
+            f.loc[i, "nc_legacy"] / payroll_db_legacy
+            if payroll_db_legacy > 0 else 0
+        )
+        f.loc[i, "nc_rate_new"] = (
+            f.loc[i, "nc_new"] / payroll_new_denom
+            if payroll_new_denom > 0 else 0
+        )
+
+        # Flat EE rate
+        f.loc[i, "ee_nc_rate_legacy"] = ee_rate
+        f.loc[i, "ee_nc_rate_new"] = ee_rate
+
+        # ER NC rate is the residual
+        f.loc[i, "er_nc_rate_legacy"] = f.loc[i, "nc_rate_legacy"] - ee_rate
+        f.loc[i, "er_nc_rate_new"] = f.loc[i, "nc_rate_new"] - ee_rate
+
+        # Amort rate from prior year's amort-table payments
+        cur_pay = amo_state["cur_pay"]
+        fut_pay = amo_state["fut_pay"]
+        f.loc[i, "amo_rate_legacy"] = (
+            cur_pay[i - 1].sum() / payroll_db_legacy
+            if payroll_db_legacy > 0 else 0
+        )
+        f.loc[i, "amo_rate_new"] = (
+            fut_pay[i - 1].sum() / payroll_new_denom
+            if payroll_new_denom > 0 else 0
         )
 
 
@@ -304,17 +365,19 @@ class StatutoryContributions:
             + er_stat_extra_rate(year)
         )
 
-    The term order is *load-bearing* (bit-identity risk #6 in the
-    plan): floating-point addition is non-associative, and the
-    original TRS code adds the surcharge term before the extra term.
-    Implementations must preserve that order.
+    Term order is *load-bearing* (bit-identity risk #6): floating-point
+    addition is non-associative; the original TRS code adds the
+    surcharge term before the extra term, and this implementation must
+    preserve that order.
 
     Under ``funding_policy == "statutory"`` the amortization rate is
     the residual ``er_stat_eff_rate - er_nc_rate_*``; under any other
-    funding policy the amortization rate falls back to the actuarial
-    table calculation.
-
-    Body filled in by Step 10.
+    funding policy the amortization rate falls back to the prior
+    year's amort-table payments divided by payroll, like the actuarial
+    path. The TRS-side fallback uses ``total_payroll`` (not
+    ``payroll_db_legacy``) as the legacy denominator under non-
+    statutory policies; that asymmetry is preserved by reading
+    ``f.loc[i, "total_payroll"]`` in the non-statutory branch.
     """
 
     def __init__(
@@ -326,6 +389,7 @@ class StatutoryContributions:
         surcharge_ramp_end: int,
         surcharge_ramp_rate: float,
         er_base_schedule: list,
+        ee_schedule: list,
     ) -> None:
         self.funding_policy = funding_policy
         self.public_edu_payroll_pct = public_edu_payroll_pct
@@ -334,14 +398,82 @@ class StatutoryContributions:
         self.surcharge_ramp_end = surcharge_ramp_end
         self.surcharge_ramp_rate = surcharge_ramp_rate
         self.er_base_schedule = er_base_schedule
+        self.ee_schedule = ee_schedule
 
-    def compute_year(
+    def compute_rates(
         self,
         f: pd.DataFrame,
         i: int,
         year: int,
         amo_state: dict,
     ) -> None:
-        raise NotImplementedError(
-            "StatutoryContributions.compute_year is filled in by Step 10."
+        from pension_model.core._funding_helpers import _lookup_rate_schedule
+
+        payroll_db_legacy = f.loc[i, "payroll_db_legacy"]
+        payroll_new_denom = _payroll_new_denom(f, i)
+
+        # Total NC rates
+        f.loc[i, "nc_rate_legacy"] = (
+            f.loc[i, "nc_legacy"] / payroll_db_legacy
+            if payroll_db_legacy > 0 else 0
         )
+        f.loc[i, "nc_rate_new"] = (
+            f.loc[i, "nc_new"] / payroll_new_denom
+            if payroll_new_denom > 0 else 0
+        )
+
+        # EE rate from schedule
+        ee_rate = _lookup_rate_schedule(self.ee_schedule, year)
+        f.loc[i, "ee_nc_rate_legacy"] = ee_rate
+        f.loc[i, "ee_nc_rate_new"] = ee_rate
+
+        # ER NC rate is the residual
+        f.loc[i, "er_nc_rate_legacy"] = f.loc[i, "nc_rate_legacy"] - ee_rate
+        f.loc[i, "er_nc_rate_new"] = f.loc[i, "nc_rate_new"] - ee_rate
+
+        # Statutory rate cascade
+        f.loc[i, "er_stat_base_rate"] = _lookup_rate_schedule(
+            self.er_base_schedule, year)
+
+        if year <= self.surcharge_ramp_end:
+            f.loc[i, "public_edu_surcharge_rate"] = (
+                f.loc[i - 1, "public_edu_surcharge_rate"]
+                + self.surcharge_ramp_rate
+            )
+        else:
+            f.loc[i, "public_edu_surcharge_rate"] = (
+                f.loc[i - 1, "public_edu_surcharge_rate"]
+            )
+
+        f.loc[i, "er_stat_extra_rate"] = (
+            self.extra_er_stat_cont
+            if year >= self.extra_er_start_year else 0
+        )
+
+        # NOTE: term order is bit-identity load-bearing — see docstring
+        f.loc[i, "er_stat_eff_rate"] = (
+            f.loc[i, "er_stat_base_rate"]
+            + f.loc[i, "public_edu_surcharge_rate"] * self.public_edu_payroll_pct
+            + f.loc[i, "er_stat_extra_rate"]
+        )
+
+        # Amort rate: statutory residual or actuarial table fallback
+        if self.funding_policy == "statutory":
+            f.loc[i, "amo_rate_legacy"] = (
+                f.loc[i, "er_stat_eff_rate"] - f.loc[i, "er_nc_rate_legacy"]
+            )
+            f.loc[i, "amo_rate_new"] = (
+                f.loc[i, "er_stat_eff_rate"] - f.loc[i, "er_nc_rate_new"]
+            )
+        else:
+            cur_pay = amo_state["cur_pay"]
+            fut_pay = amo_state["fut_pay"]
+            total_payroll = f.loc[i, "total_payroll"]
+            f.loc[i, "amo_rate_legacy"] = (
+                cur_pay[i - 1].sum() / total_payroll
+                if total_payroll > 0 else 0
+            )
+            f.loc[i, "amo_rate_new"] = (
+                fut_pay[i - 1].sum() / payroll_new_denom
+                if payroll_new_denom > 0 else 0
+            )
