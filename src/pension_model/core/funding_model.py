@@ -178,24 +178,16 @@ def run_funding_model(
             # smoothing operates per class, so N>1 classes is conceptually
             # fine. The constraint is a temporary implementation limit:
             # _compute_funding_gainloss currently iterates neither classes
-            # nor builds an aggregate frame. Phase 2's body merge lifts this
-            # limit by unifying the two compute functions into one that
-            # handles any class count uniformly.
+            # nor builds a real aggregate frame. Phase 2's body merge lifts
+            # this limit (see plan Step 2.I).
             raise NotImplementedError(
                 f"Multi-class gain/loss smoothing is pending the Phase 2 "
                 f"unified compute refactor (see plans/swirling-jingling-"
                 f"popcorn.md, Step 2.I). Plan {constants.plan_name!r} has "
                 f"{len(class_names)} classes."
             )
-        first_class = class_names[0]
-        df = _compute_funding_gainloss(
-            liability_results[first_class], funding_inputs, constants)
-        # Build a real aggregate frame as a distinct copy (no aliasing).
-        # For a single-class plan, the aggregate IS the class frame
-        # mathematically, so a copy is correct. Distinct objects mean
-        # downstream code can mutate one without affecting the other.
-        agg = df.copy()
-        return {first_class: df, constants.plan_name: agg}
+        return _compute_funding_gainloss(
+            liability_results, funding_inputs, constants)
 
     raise ValueError(
         f"Unknown funding.ava_smoothing.method: {method!r}. "

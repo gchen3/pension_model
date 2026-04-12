@@ -540,22 +540,31 @@ def _compute_funding_corridor(
 
 
 def _compute_funding_gainloss(
-    liability_result: pd.DataFrame,
+    liability_results: dict,
     funding_inputs: dict,
     constants,
-) -> pd.DataFrame:
+) -> dict:
     """Gain/loss deferral funding model (statutory-rate, single-class).
 
     Args:
-        liability_result: Output of run_plan_pipeline for the single class.
+        liability_results: Dict mapping class_name -> liability pipeline
+            output DataFrame. Currently restricted to a single-class
+            dict; multi-class support is enabled by Step 2.I.
         funding_inputs: Output of load_funding_inputs().
         constants: PlanConfig.
 
     Returns:
-        DataFrame with funding projection columns. The caller is
-        responsible for wrapping this into the standard
-        ``{class_name: df, plan_name: agg_df}`` dict.
+        Dict mapping class_name -> funding DataFrame, plus an aggregate
+        frame keyed by ``constants.plan_name``. For a single-class plan
+        the aggregate is a distinct copy of the class frame (no
+        DataFrame aliasing); downstream code can mutate one without
+        affecting the other.
     """
+    class_names = list(constants.classes)
+    first_class = class_names[0]
+    liab = liability_results[first_class]
+    agg_name = constants.plan_name
+
     econ = constants.economic
     fund = constants.funding
     r_cfg = constants.ranges
@@ -622,8 +631,6 @@ def _compute_funding_gainloss(
         if col != "year":
             val = init.get(col, 0)
             f.loc[0, col] = float(val if pd.notna(val) else 0)
-
-    liab = liability_result
 
     # --- Calibration: payroll ratios and NC rates from liability pipeline ---
     # R uses lag(ratio) — ratio from previous year applied to next year's payroll
@@ -936,4 +943,8 @@ def _compute_funding_gainloss(
             dr=dr_new, amo_pay_growth=amo_pay_growth,
         )
 
-    return f
+    # Build the aggregate frame as a distinct copy. For a single-class
+    # plan the aggregate IS the class frame mathematically; a copy
+    # preserves that while ensuring the dict's two entries point at
+    # different DataFrame objects (no mutation aliasing).
+    return {first_class: f, agg_name: f.copy()}
