@@ -434,9 +434,6 @@ def _evaluate_rate_component(
     otherwise holds flat. ``start_year``, if provided, makes the rate
     zero until that year is reached.
 
-    (The ramp form matches the pre-refactor ``public_edu_surcharge_rate``
-    logic: read prior year's value, add ``surcharge_ramp_rate`` until
-    ``surcharge_ramp_end``, then carry flat.)
     """
     if component.start_year is not None and year < component.start_year:
         return 0.0

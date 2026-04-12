@@ -53,66 +53,25 @@ from pension_model.core._funding_strategies import (
 
 
 def _resolve_er_rate_components(funding_raw: dict) -> list:
-    """Build the list of statutory employer rate components.
+    """Build the list of statutory employer rate components from config.
 
-    Preferred schema (new): ``funding.statutory_rates.er_rate_components``
-    is a list of component dicts. Each dict is passed to
-    ``RateComponent.from_config``. This is the plan-agnostic schema.
+    Reads ``funding.statutory_rates.er_rate_components`` (a list of
+    component dicts) and returns the corresponding list of
+    ``RateComponent`` objects. Each dict is passed to
+    ``RateComponent.from_config``.
 
-    Legacy schema (pre-Phase-3): three flat fields describe a base +
-    surcharge + extra cascade. We synthesize the equivalent three-
-    component list here. The synthesized components are bit-identical
-    to the pre-refactor hardcoded cascade, by construction: each
-    component's rate matches the pre-refactor code's per-term rate
-    computation, and the summation order (base → surcharge → extra)
-    matches the pre-refactor addition order.
-
-    The legacy schema will be removed in Step 1.4c once TRS's config
-    has been migrated to the new schema.
+    A plan that uses the statutory contribution strategy must declare
+    its components explicitly — there are no hardcoded defaults.
     """
     stat_rates = funding_raw.get("statutory_rates", {})
-
-    # New schema: an explicit list of components.
-    if "er_rate_components" in stat_rates:
-        return [RateComponent.from_config(c) for c in stat_rates["er_rate_components"]]
-
-    # Legacy schema: synthesize from flat fields.
-    er_base_schedule = stat_rates.get(
-        "er_base_rate_schedule",
-        [{"from_year": 0, "rate": 0.0}],
-    )
-    surcharge_cfg = stat_rates.get("surcharge", {})
-    public_edu_payroll_pct = funding_raw.get("public_edu_payroll_percent", 0.0)
-    extra_er_stat_cont = funding_raw.get("extra_er_stat_cont", 0.0)
-    extra_er_start_year = stat_rates.get("extra_er_start_year")
-
-    # Note: the `name` fields below are the exact column names used
-    # before this refactor (see plans/txtrs/data/funding/init_funding.csv),
-    # so the synthesized components produce a bit-identical funding frame.
-    return [
-        RateComponent(
-            name="er_stat_base_rate",
-            payroll_share=1.0,
-            schedule=er_base_schedule,
-        ),
-        RateComponent(
-            name="public_edu_surcharge_rate",
-            payroll_share=float(public_edu_payroll_pct),
-            initial_rate=0.0,
-            ramp={
-                "rate_per_year": float(surcharge_cfg.get("ramp_rate", 0.0)),
-                "end_year": surcharge_cfg.get("ramp_end_year", 0),
-            },
-        ),
-        RateComponent(
-            name="er_stat_extra_rate",
-            payroll_share=1.0,
-            schedule=[
-                {"from_year": 0, "rate": 0.0},
-                {"from_year": extra_er_start_year, "rate": float(extra_er_stat_cont)},
-            ] if extra_er_start_year is not None else [{"from_year": 0, "rate": 0.0}],
-        ),
-    ]
+    components = stat_rates.get("er_rate_components")
+    if components is None:
+        raise ValueError(
+            "funding.statutory_rates.er_rate_components is required when "
+            "using the statutory contribution strategy. See "
+            "plans/txtrs/config/plan_config.json for an example schema."
+        )
+    return [RateComponent.from_config(c) for c in components]
 
 
 def _compute_funding_corridor(
