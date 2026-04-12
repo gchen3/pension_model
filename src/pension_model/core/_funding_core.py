@@ -30,6 +30,9 @@ Bit-identity constraints (preserved from the original implementations):
     the plan-aggregate frame; the original code called it ``frs``.
 """
 
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -50,6 +53,154 @@ from pension_model.core._funding_strategies import (
     RateComponent,
     StatutoryContributions,
 )
+
+
+@dataclass
+class FundingContext:
+    """Resolved configuration for one funding compute run.
+
+    A container for scalars, flags, strategies, and pre-loaded frames
+    that both ``_compute_funding_corridor`` and
+    ``_compute_funding_gainloss`` need during setup and year-loop
+    execution. Built once per call via :func:`_resolve_funding_context`.
+
+    Having a single dataclass means adding a new config field or flag
+    involves one parse point, not two; and the year-loop phase helpers
+    (Step 2.E) take ``ctx: FundingContext`` rather than ~15 loose
+    scalars.
+    """
+
+    # Scalars — economic and funding parameters
+    dr_current: float
+    dr_new: float
+    dr_old: Optional[float]
+    payroll_growth: float
+    inflation: float
+    amo_pay_growth: float
+    amo_period_new: int
+    funding_lag: int
+    db_ee_cont_rate: float
+    model_return: float
+    start_year: int
+    n_years: int
+
+    # Strategies
+    ava_strategy: Any
+    cont_strategy: Any
+
+    # Class iteration
+    class_names: list
+    agg_name: str
+    has_drop: bool
+    drop_ref_class: Optional[str]
+    all_classes: list  # class_names + ["drop"] if has_drop
+
+    # Raw config sub-maps (for legacy paths that still read funding_raw)
+    funding_policy: str
+    return_scen_col: str
+
+    # Input frames
+    init_funding: pd.DataFrame
+    amort_layers: Optional[pd.DataFrame]
+
+    # Return-scenario frame — prepared per strategy (Step 2.F will move
+    # the prep into a dedicated helper).
+    ret_scen: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+
+def _resolve_funding_context(
+    constants,
+    funding_inputs: dict,
+) -> FundingContext:
+    """Build a :class:`FundingContext` from the plan config and inputs.
+
+    Reads ``constants.economic``, ``constants.funding``,
+    ``constants.ranges``, and ``constants.raw`` to extract all scalars,
+    flags, and strategy selections a funding compute run needs.
+
+    Selects ``ava_strategy`` from ``funding.ava_smoothing.method``
+    (``"corridor"`` → ``CorridorSmoothing``; ``"gain_loss"`` →
+    ``GainLossSmoothing``) and ``cont_strategy`` from whether
+    ``funding.statutory_rates`` is present in config (→
+    ``StatutoryContributions``) or not (→ ``ActuarialContributions``).
+
+    The ``ret_scen`` frame is returned unmodified from
+    ``funding_inputs["return_scenarios"]``; strategy-dependent
+    overrides are applied by the caller.
+    """
+    econ = constants.economic
+    fund = constants.funding
+    r = constants.ranges
+    raw = constants.raw if hasattr(constants, "raw") else {}
+    funding_raw = raw.get("funding", {})
+
+    # amo_method normalization (legacy pre-Phase-3 code path)
+    amo_method = fund.amo_method if hasattr(fund, "amo_method") else "level_pct"
+    amo_pay_growth = fund.amo_pay_growth
+    if amo_method == "level $":
+        amo_pay_growth = 0
+
+    # Class / DROP topology
+    class_names = list(constants.classes)
+    agg_name = constants.plan_name
+    has_drop = funding_raw.get("has_drop", False)
+    drop_ref_class = funding_raw.get("drop_reference_class", class_names[0]) if class_names else None
+    all_classes = class_names + (["drop"] if has_drop else [])
+
+    # Strategy selection
+    method = (fund.ava_smoothing or {}).get("method")
+    if method == "corridor":
+        ava_strategy = CorridorSmoothing()
+    elif method == "gain_loss":
+        ava_strategy = GainLossSmoothing()
+    else:
+        raise ValueError(
+            f"Unknown funding.ava_smoothing.method: {method!r}. "
+            f"Supported: 'corridor', 'gain_loss'."
+        )
+
+    stat_rates = funding_raw.get("statutory_rates")
+    if stat_rates:
+        ee_schedule = stat_rates.get(
+            "ee_rate_schedule",
+            [{"from_year": 0, "rate": constants.benefit.db_ee_cont_rate}],
+        )
+        cont_strategy = StatutoryContributions(
+            funding_policy=fund.funding_policy,
+            ee_schedule=ee_schedule,
+            components=_resolve_er_rate_components(funding_raw),
+        )
+    else:
+        cont_strategy = ActuarialContributions(
+            db_ee_cont_rate=constants.benefit.db_ee_cont_rate,
+        )
+
+    return FundingContext(
+        dr_current=econ.dr_current,
+        dr_new=econ.dr_new,
+        dr_old=getattr(econ, "dr_old", None),
+        payroll_growth=econ.payroll_growth,
+        inflation=econ.inflation,
+        amo_pay_growth=amo_pay_growth,
+        amo_period_new=fund.amo_period_new,
+        funding_lag=getattr(fund, "funding_lag", 0),
+        db_ee_cont_rate=constants.benefit.db_ee_cont_rate,
+        model_return=econ.model_return,
+        start_year=r.start_year,
+        n_years=r.model_period + 1,
+        ava_strategy=ava_strategy,
+        cont_strategy=cont_strategy,
+        class_names=class_names,
+        agg_name=agg_name,
+        has_drop=has_drop,
+        drop_ref_class=drop_ref_class,
+        all_classes=all_classes,
+        funding_policy=fund.funding_policy,
+        return_scen_col=raw.get("economic", {}).get("return_scen", "assumption"),
+        init_funding=funding_inputs["init_funding"],
+        amort_layers=funding_inputs.get("amort_layers"),
+        ret_scen=funding_inputs["return_scenarios"].copy(),
+    )
 
 
 def _resolve_er_rate_components(funding_raw: dict) -> list:
@@ -94,53 +245,39 @@ def _compute_funding_corridor(
     # Local import to avoid a circular import via funding_model.py.
     from pension_model.core.funding_model import build_amort_period_tables
 
-    econ = constants.economic
-    fund_params = constants.funding
-    r = constants.ranges
-    init_funding = funding_inputs["init_funding"]
-    amort_layers = funding_inputs["amort_layers"]
-    return_scenarios = funding_inputs["return_scenarios"]
-
-    dr_current = econ.dr_current
-    dr_new = econ.dr_new
-    dr_old = econ.dr_old
-    payroll_growth = econ.payroll_growth
-    amo_pay_growth = fund_params.amo_pay_growth
-    amo_period_new = fund_params.amo_period_new
-    funding_lag = fund_params.funding_lag
-    db_ee_cont_rate = constants.benefit.db_ee_cont_rate
-    inflation = econ.inflation
-
-    # AVA smoothing strategy: corridor at the plan-aggregate level.
-    ava_strategy = CorridorSmoothing()
-
-    # Contribution strategy: calibrated NC rates + amort-table-driven amort.
-    cont_strategy = ActuarialContributions(db_ee_cont_rate=db_ee_cont_rate)
-
-    model_period = r.model_period
-    start_year = r.start_year
-    n_years = model_period + 1
-
-    class_names = list(constants.classes)
-    agg_name = constants.plan_name
-    has_drop = constants.raw.get("funding", {}).get("has_drop", False)
-    drop_ref_class = constants.raw.get("funding", {}).get("drop_reference_class", class_names[0])
-    all_classes = class_names + (["drop"] if has_drop else [])
+    ctx = _resolve_funding_context(constants, funding_inputs)
+    dr_current = ctx.dr_current
+    dr_new = ctx.dr_new
+    dr_old = ctx.dr_old
+    payroll_growth = ctx.payroll_growth
+    amo_pay_growth = ctx.amo_pay_growth
+    amo_period_new = ctx.amo_period_new
+    funding_lag = ctx.funding_lag
+    db_ee_cont_rate = ctx.db_ee_cont_rate
+    inflation = ctx.inflation
+    start_year = ctx.start_year
+    n_years = ctx.n_years
+    ava_strategy = ctx.ava_strategy
+    cont_strategy = ctx.cont_strategy
+    class_names = ctx.class_names
+    agg_name = ctx.agg_name
+    has_drop = ctx.has_drop
+    drop_ref_class = ctx.drop_ref_class
+    all_classes = ctx.all_classes
+    return_scen_col = ctx.return_scen_col
+    init_funding = ctx.init_funding
+    amort_layers = ctx.amort_layers
 
     # Return scenario setup — select which column of return_scenarios to use.
-    # "assumption" (default) → assets earn dr_current each year.
-    # "model" → assets earn model_return each year.
-    # Other columns (e.g. "recession") use their pre-loaded values.
-    return_scen_col = constants.raw.get("economic", {}).get("return_scen", "assumption")
-    ret_scen = return_scenarios.copy()
-    # Year 1 (start_year+1) keeps its CSV values (actual realized return).
-    # Years after that use model_return / dr_current as the projected path.
-    first_proj_year = r.start_year + 2  # year after the first projection year
-    ret_scen.loc[ret_scen["year"] >= first_proj_year, "model"] = econ.model_return
+    # Corridor path: years 0 and 1 keep their CSV values (actual realized
+    # return); years >= start_year + 2 get overridden with model_return /
+    # dr_current for the projected path. Gainloss path overrides
+    # unconditionally — that asymmetry is load-bearing (bit-identity
+    # risk #7) and is handled by Step 2.F (not yet wired).
+    ret_scen = ctx.ret_scen
+    first_proj_year = ctx.start_year + 2
+    ret_scen.loc[ret_scen["year"] >= first_proj_year, "model"] = ctx.model_return
     ret_scen.loc[ret_scen["year"] >= first_proj_year, "assumption"] = dr_current
-
-    if fund_params.amo_method == "level $":
-        amo_pay_growth = 0
 
     # Initialize funding tables
     funding = {}
@@ -193,7 +330,7 @@ def _compute_funding_corridor(
     amo_tables = {}
     for cn in all_classes:
         cur_per, fut_per, init_bal, max_col = build_amort_period_tables(
-            amort_layers, cn, amo_period_new, funding_lag, model_period)
+            amort_layers, cn, amo_period_new, funding_lag, n_years - 1)
 
         cur_debt = np.zeros((n_years, max_col + 1))
         if len(init_bal) > 0:
@@ -540,67 +677,59 @@ def _compute_funding_corridor(
 
 
 def _compute_funding_gainloss(
-    liability_result: pd.DataFrame,
+    liability_results: dict,
     funding_inputs: dict,
     constants,
-) -> pd.DataFrame:
+) -> dict:
     """Gain/loss deferral funding model (statutory-rate, single-class).
 
     Args:
-        liability_result: Output of run_plan_pipeline for the single class.
+        liability_results: Dict mapping class_name -> liability pipeline
+            output DataFrame. Currently restricted to a single-class
+            dict; multi-class support is enabled by Step 2.I.
         funding_inputs: Output of load_funding_inputs().
         constants: PlanConfig.
 
     Returns:
-        DataFrame with funding projection columns. The caller is
-        responsible for wrapping this into the standard
-        ``{class_name: df, plan_name: agg_df}`` dict.
+        Dict mapping class_name -> funding DataFrame, plus an aggregate
+        frame keyed by ``constants.plan_name``. For a single-class plan
+        the aggregate is a distinct copy of the class frame (no
+        DataFrame aliasing); downstream code can mutate one without
+        affecting the other.
     """
-    econ = constants.economic
-    fund = constants.funding
-    r_cfg = constants.ranges
+    ctx = _resolve_funding_context(constants, funding_inputs)
+    class_names = ctx.class_names
+    first_class = class_names[0]
+    liab = liability_results[first_class]
+    agg_name = ctx.agg_name
 
-    dr_current = econ.dr_current
-    dr_new = econ.dr_new
-    payroll_growth = econ.payroll_growth
-    inflation = econ.inflation
-
-    amo_pay_growth = fund.amo_pay_growth
-    amo_period_new = fund.amo_period_new
-    funding_policy = fund.funding_policy
-
-    amo_method = fund.amo_method if hasattr(fund, "amo_method") else "level_pct"
-    if amo_method == "level $":
-        amo_pay_growth = 0
-
-    model_period = r_cfg.model_period
-    start_year = r_cfg.start_year
-    n_years = model_period + 1
-
-    # Return scenario column selection
-    return_scen_col = constants.raw.get("economic", {}).get("return_scen", "assumption")
+    dr_current = ctx.dr_current
+    dr_new = ctx.dr_new
+    payroll_growth = ctx.payroll_growth
+    inflation = ctx.inflation
+    amo_pay_growth = ctx.amo_pay_growth
+    amo_period_new = ctx.amo_period_new
+    funding_policy = ctx.funding_policy
+    start_year = ctx.start_year
+    n_years = ctx.n_years
+    return_scen_col = ctx.return_scen_col
+    ava_strategy = ctx.ava_strategy
+    cont_strategy = ctx.cont_strategy
 
     # --- Load initial row ---
-    init = funding_inputs["init_funding"].iloc[0]
-    ret_scen = funding_inputs["return_scenarios"].copy()
+    init = ctx.init_funding.iloc[0]
 
-    # Set "model" and "assumption" columns in return_scenarios
-    ret_scen["model"] = econ.model_return
+    # Return-scenario override: gainloss overrides unconditionally
+    # (bit-identity risk #7). Corridor gates year>=start_year+2. Will
+    # move to a dedicated helper in Step 2.F.
+    ret_scen = ctx.ret_scen
+    ret_scen["model"] = ctx.model_return
     ret_scen["assumption"] = dr_current
 
-    # --- Funding config parameters ---
+    # --- Legacy funding config parameters (not yet on ctx) ---
     raw = constants.raw if hasattr(constants, "raw") else {}
     funding_raw = raw.get("funding", {})
-
     amo_period_current = funding_raw.get("amo_period_current", 30)
-
-    # Statutory rate components: either a config-driven list of
-    # RateComponent entries (new schema), or synthesized from the old
-    # flat fields (legacy schema; TRS uses this until Step 1.4b).
-    stat_rates = funding_raw.get("statutory_rates", {})
-    ee_schedule = stat_rates.get("ee_rate_schedule",
-                                 [{"from_year": 0, "rate": constants.benefit.db_ee_cont_rate}])
-    er_rate_components = _resolve_er_rate_components(funding_raw)
 
     # nc_cal: authoritative source is calibration.json (class_data), with
     # funding_raw as legacy fallback
@@ -622,8 +751,6 @@ def _compute_funding_gainloss(
         if col != "year":
             val = init.get(col, 0)
             f.loc[0, col] = float(val if pd.notna(val) else 0)
-
-    liab = liability_result
 
     # --- Calibration: payroll ratios and NC rates from liability pipeline ---
     # R uses lag(ratio) — ratio from previous year applied to next year's payroll
@@ -708,16 +835,8 @@ def _compute_funding_gainloss(
             dr_current, amo_pay_growth, int(amo_per_current_diag[0, 0]),
             debt_current[0, 0], t=0.5)
 
-    # AVA smoothing strategy: 4-year gain/loss deferral cascade, per class.
-    ava_strategy = GainLossSmoothing()
-
-    # Contribution strategy: statutory rate cascade with optional residual
-    # amortization rate (when funding_policy == "statutory").
-    cont_strategy = StatutoryContributions(
-        funding_policy=funding_policy,
-        ee_schedule=ee_schedule,
-        components=er_rate_components,
-    )
+    # Strategies (ava_strategy, cont_strategy) already instantiated by
+    # _resolve_funding_context above.
 
     # --- Main year loop ---
     for i in range(1, n_years):
@@ -936,4 +1055,8 @@ def _compute_funding_gainloss(
             dr=dr_new, amo_pay_growth=amo_pay_growth,
         )
 
-    return f
+    # Build the aggregate frame as a distinct copy. For a single-class
+    # plan the aggregate IS the class frame mathematically; a copy
+    # preserves that while ensuring the dict's two entries point at
+    # different DataFrame objects (no mutation aliasing).
+    return {first_class: f, agg_name: f.copy()}
