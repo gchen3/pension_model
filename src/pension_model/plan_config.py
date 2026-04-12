@@ -851,10 +851,7 @@ def get_reduce_factor(config: PlanConfig, class_name: str, tier: str,
     if "nra" in reduction:
         nra_map = reduction["nra"]
         rate = reduction["rate_per_year"]
-        if class_name == "special" and "special" in nra_map:
-            nra = nra_map["special"]
-        else:
-            nra = nra_map.get("default", 65)
+        nra = nra_map.get(class_name, nra_map.get("default", 65))
         return 1.0 - rate * (nra - dist_age)
 
     # Rule-based reduction (condition → formula lookup)
@@ -1368,10 +1365,7 @@ def resolve_reduce_factor_vec(config: PlanConfig,
         if "nra" in reduction:
             nra_map = reduction["nra"]
             rate = reduction["rate_per_year"]
-            if cn == "special" and "special" in nra_map:
-                nra = nra_map["special"]
-            else:
-                nra = nra_map.get("default", 65)
+            nra = nra_map.get(cn, nra_map.get("default", 65))
             vals = 1.0 - rate * (nra - sub_age)
             result[idx_arr] = vals
             continue
