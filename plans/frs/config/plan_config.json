@@ -318,7 +318,15 @@
   "modeling": {
     "use_earliest_retire": false,
     "term_vested_method": "growing_annuity",
-    "male_mp_forward_shift": 0
+    "male_mp_forward_shift": 0,
+    "age_groups": [
+      {"max_age": 24, "label": "under_25"},
+      {"min_age": 25, "max_age": 29, "label": "25_to_29"},
+      {"min_age": 30, "max_age": 34, "label": "30_to_34"},
+      {"min_age": 35, "max_age": 44, "label": "35_to_44"},
+      {"min_age": 45, "max_age": 54, "label": "45_to_54"},
+      {"min_age": 55, "label": "over_55"}
+    ]
   },
 
   "salary_growth_col_map": {

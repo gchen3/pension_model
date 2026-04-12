@@ -194,11 +194,39 @@ def _load_decrements(
         _build_years_from_nr_decrements(inputs, constants, term_df, ret_df, decr_dir, class_name)
     else:
         # YOS-only lookup: convert to wide format for existing builder
-        _build_yos_only_decrements(inputs, term_df, ret_df)
+        _build_yos_only_decrements(inputs, constants, term_df, ret_df)
+
+
+def _resolve_age_group_breaks(constants: PlanConfig) -> list:
+    """Parse ``modeling.age_groups`` config into (min, max, label) tuples.
+
+    Each group entry in config has a ``label`` plus optional ``min_age``
+    and ``max_age`` (either bound can be omitted to mean open-ended).
+    Returned tuples use ``-np.inf`` / ``np.inf`` for the omitted bounds,
+    matching the classification logic in ``_age_to_group`` below.
+
+    Required for plans with YOS-only termination rate tables. Raises
+    ValueError with a clear message if the config field is missing.
+    """
+    raw = constants.raw if hasattr(constants, "raw") else {}
+    groups_cfg = raw.get("modeling", {}).get("age_groups")
+    if not groups_cfg:
+        raise ValueError(
+            "modeling.age_groups is required in plan config when the "
+            "plan uses YOS-only termination rate tables. See "
+            "plans/frs/config/plan_config.json for an example schema."
+        )
+    breaks = []
+    for g in groups_cfg:
+        lo = g.get("min_age", -np.inf)
+        hi = g.get("max_age", np.inf)
+        breaks.append((lo, hi, g["label"]))
+    return breaks
 
 
 def _build_yos_only_decrements(
     inputs: dict,
+    constants: PlanConfig,
     term_df: pd.DataFrame,
     ret_df: pd.DataFrame,
 ):
@@ -208,20 +236,23 @@ def _build_yos_only_decrements(
       - term_rate_avg: yos × age_group wide format
       - normal_retire_tier1/2: age × rate
       - early_retire_tier1/2: age × rate
+
+    Age group bands are read from ``modeling.age_groups`` in plan config
+    via ``_resolve_age_group_breaks``.
     """
     # Convert termination rates: (lookup_type=yos, age, lookup_value, term_rate) → wide format
     yos_rates = term_df[term_df["lookup_type"] == "yos"].copy()
 
-    # Reconstruct age groups from individual ages
-    age_group_breaks = [(-np.inf, 24, "under_25"), (25, 29, "25_to_29"),
-                        (30, 34, "30_to_34"), (35, 44, "35_to_44"),
-                        (45, 54, "45_to_54"), (55, np.inf, "over_55")]
+    # Age groups come from plan config, not hardcoded
+    age_group_breaks = _resolve_age_group_breaks(constants)
+    age_group_labels = [label for _, _, label in age_group_breaks]
+    default_label = age_group_labels[-1]
 
     def _age_to_group(age):
         for lo, hi, label in age_group_breaks:
             if lo <= age <= hi:
                 return label
-        return "over_55"
+        return default_label
 
     yos_rates["age_group"] = yos_rates["age"].apply(_age_to_group)
 
@@ -232,8 +263,8 @@ def _build_yos_only_decrements(
 
     # Pivot to wide: yos rows, age_group columns
     term_wide = grouped.pivot(index="yos", columns="age_group", values="term_rate").reset_index()
-    # Ensure column order matches expected
-    expected_cols = ["yos", "under_25", "25_to_29", "30_to_34", "35_to_44", "45_to_54", "over_55"]
+    # Ensure column order matches the config-declared group order
+    expected_cols = ["yos", *age_group_labels]
     for col in expected_cols:
         if col not in term_wide.columns:
             term_wide[col] = 0.0
