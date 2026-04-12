@@ -45,7 +45,7 @@ def rundown_results():
     Returns (liability_dict, funding_dict, constants).
     """
     from pension_model.core.pipeline import run_plan_pipeline
-    from pension_model.core.funding_model import load_funding_inputs, compute_funding
+    from pension_model.core.funding_model import load_funding_inputs, run_funding_model
     from pension_model.plan_config import load_frs_config
 
     constants = load_frs_config()
@@ -57,7 +57,7 @@ def rundown_results():
 
     funding_dir = constants.resolve_data_dir() / "funding"
     funding_inputs = load_funding_inputs(funding_dir)
-    funding = compute_funding(liability, funding_inputs, constants)
+    funding = run_funding_model(liability, funding_inputs, constants)
 
     return liability, funding, constants
 

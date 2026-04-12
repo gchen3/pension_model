@@ -26,14 +26,14 @@ FUNDING_COLS = [
 def funding_results():
     """Run the full pipeline once and cache results for all tests."""
     from pension_model.core.pipeline import run_plan_pipeline
-    from pension_model.core.funding_model import load_funding_inputs, compute_funding
+    from pension_model.core.funding_model import load_funding_inputs, run_funding_model
     from pension_model.plan_config import load_frs_config
 
     constants = load_frs_config()
     liability = run_plan_pipeline(constants)
     funding_dir = constants.resolve_data_dir() / "funding"
     funding_inputs = load_funding_inputs(funding_dir)
-    return compute_funding(liability, funding_inputs, constants)
+    return run_funding_model(liability, funding_inputs, constants)
 
 
 @pytest.mark.parametrize("class_name", CLASSES)

@@ -84,7 +84,7 @@ plan_config.json + calibration.json
   load_funding_inputs()  ───────────────>  init_funding, return_scenarios
         |
         v
-  compute_funding()  ───────────────────>  year-by-year funding projection
+  run_funding_model()  ─────────────────>  year-by-year funding projection
         |
         v
   build_plan_summary()  ────────────────>  summary.csv, liability_stacked.csv
@@ -145,20 +145,20 @@ The function returns four DataFrames: `wf_active`, `wf_term`, `wf_retire`, `wf_r
 
 **`load_funding_inputs()`** (`core/funding_model.py:26`) reads `init_funding.csv` (initial assets and liabilities), `return_scenarios.csv` (investment returns by year), and `amort_layers.csv` (existing UAL amortization schedules).
 
-**`compute_funding()`** (`core/funding_model.py:125`, FRS) or **`compute_funding_trs()`** (`core/funding_model.py:660`, TRS) runs the year-by-year funding projection. For each year:
+**`run_funding_model()`** (`core/funding_model.py`) is the public entry point. It dispatches on `funding.ava_smoothing.method` in plan config — `"corridor"` routes to `_compute_funding_corridor` (multi-class plans with plan-aggregate corridor smoothing); `"gain_loss"` routes to `_compute_funding_gainloss` (single-class plans with per-class 4-year deferral cascade). Both functions live in `core/_funding_core.py`. For each year both paths:
 
 1. Get payroll, benefits, AAL from liability output
 2. Apply calibration: `nc_rate = nc_rate_est * nc_cal`; `aal = aal_est + pvfb_term_current`
 3. Project MVA: `(mva + contributions - benefits) * (1 + return)`
-4. Smooth AVA using corridor method (80%-120% of MVA) with gain-loss recognition
+4. Smooth AVA via the configured smoothing strategy
 5. Compute UAL = AAL - AVA, amortize by layer
 6. Calculate employer contribution: NC + amortization + admin + DC
 
-The funding model variant is selected by `config.funding_model` (`"frs"` or `"trs"`).
+`run_funding_model` always returns a dict shaped `{class_name: DataFrame, plan_name: aggregate_DataFrame, ...}`. For single-class plans the aggregate frame is a distinct copy of the class frame (no DataFrame aliasing). For multi-class plans the aggregate is built by accumulating each class's contributions year by year.
 
 ### 6. Output
 
-**`build_plan_summary()`** normalizes FRS (dict of per-class DataFrames) and TRS (single DataFrame) funding output into a standardized format. The CLI prints a parameters block and a year-1/year-30 comparison table, then writes:
+**`build_plan_summary()`** consumes the uniform `run_funding_model` dict shape directly. The CLI prints a parameters block and a year-1/year-30 comparison table, then writes:
 
 - `output/{plan}/summary.csv` — year-by-year funding summary
 - `output/{plan}/liability_stacked.csv` — detailed liability components by class and year
