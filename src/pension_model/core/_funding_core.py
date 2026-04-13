@@ -481,6 +481,46 @@ def _phase_ual_and_funded_ratios(f: pd.DataFrame, i: int) -> None:
     f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / total_aal if total_aal != 0 else 0
 
 
+def _phase_cash_flow_and_solvency(f: pd.DataFrame, i: int, roa: float) -> None:
+    """Compute DB cash flows, the solvency contribution, and net cash flow.
+
+    Reads per-leg contributions (``ee_nc_cont_*``, ``er_nc_cont_*``,
+    ``er_amo_cont_*``, ``admin_exp_*``) and liability outflows
+    (``ben_payment_*``, ``refund_*``) off the frame for year ``i``.
+
+    Writes ``solv_cont`` (the aggregate solvency top-up required to
+    keep MVA non-negative), splits it across legs by AAL share, and
+    writes ``net_cf_legacy`` / ``net_cf_new`` — the operational cash
+    flow that feeds the MVA roll-forward.
+
+    DC contributions are deliberately excluded from cash flow: DC money
+    is paid directly to member accounts and never flows through the DB
+    fund.
+    """
+    cf_legacy = (
+        f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
+        + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
+        - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"]
+    )
+    cf_new = (
+        f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
+        + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
+        - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"]
+    )
+
+    f.loc[i, "solv_cont"] = _solvency_cont(
+        mva_prev=f.loc[i - 1, "total_mva"],
+        cf_total=cf_legacy + cf_new,
+        roa=roa,
+    )
+    if f.loc[i, "total_aal"] > 0:
+        f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
+        f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
+
+    f.loc[i, "net_cf_legacy"] = cf_legacy + f.loc[i, "solv_cont_legacy"]
+    f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+
+
 def _phase_mva(f: pd.DataFrame, i: int, roa: float) -> None:
     """Roll MVA forward one year for both legs.
 
@@ -761,24 +801,7 @@ def _compute_funding_corridor(
             f.loc[i, "roa"] = roa
             agg.loc[i, "roa"] = roa
 
-            cf_leg = (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
-                      + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
-                      - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"])
-            cf_new = (f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
-                      + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
-                      - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
-
-            f.loc[i, "solv_cont"] = _solvency_cont(
-                mva_prev=f.loc[i - 1, "total_mva"],
-                cf_total=cf_leg + cf_new,
-                roa=roa,
-            )
-            if f.loc[i, "total_aal"] > 0:
-                f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
-                f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
-
-            f.loc[i, "net_cf_legacy"] = cf_leg + f.loc[i, "solv_cont_legacy"]
-            f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+            _phase_cash_flow_and_solvency(f, i, roa)
             _accumulate_to_aggregate(agg, f, i, ["net_cf_legacy", "net_cf_new"])
 
             _phase_mva(f, i, roa)
@@ -1085,25 +1108,7 @@ def _compute_funding_gainloss(
         f.loc[i, "roa"] = roa
 
         # Cash flows and solvency contribution
-        cf_legacy = (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
-                     + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
-                     - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"])
-        cf_new = (f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
-                  + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
-                  - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
-        cf_total = cf_legacy + cf_new
-
-        f.loc[i, "solv_cont"] = _solvency_cont(
-            mva_prev=f.loc[i - 1, "total_mva"],
-            cf_total=cf_total,
-            roa=roa,
-        )
-        if f.loc[i, "total_aal"] > 0:
-            f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
-            f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
-
-        f.loc[i, "net_cf_legacy"] = cf_legacy + f.loc[i, "solv_cont_legacy"]
-        f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+        _phase_cash_flow_and_solvency(f, i, roa)
 
         # MVA projection
         _phase_mva(f, i, roa)
