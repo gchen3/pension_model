@@ -135,25 +135,140 @@ Other scenarios currently in the repo: [no\_cola.json](../scenarios/no_cola.json
 
 ---
 
-## 7\. Stepping through the model (optional / deeper-dive)
+## 7\. Plan features via config — DC, CB, DROP
+
+Optional plan features are turned on in config, not in code. A plan's `plan_config.json` declares which features apply; the Python pipeline reads those declarations and selects the right code paths. Below are the three non-DB features currently wired up.
+
+> **Known limitations** are flagged per-feature. Config keys and data-file patterns are stable; specific field names inside each feature's dict may still evolve — treat the JSON snippets as representative rather than frozen.
+
+### 7a. Defined Contribution (DC)
+
+- **Exercised today:** FRS (the FRS Investment Plan) and TRS (the ORP).
+- **Activation:** add `"dc"` to `benefit.benefit_types`. Presence of the string is the switch; there is no boolean flag.
+- **Allocation:** DC's share of each cohort is set by `plan_design` ratios; for FRS, DC employer contribution rates sit in `valuation_inputs` per class.
+- **TRS config block** (fuller, because TRS exposes DC assumptions directly):
+
+  ```json
+  "benefit": {
+    "benefit_types": ["db", "cb", "dc"],
+    "dc": {
+      "ee_cont_rate": 0.0225,
+      "assumed_return": 0.07,
+      "return_volatility": 0.12
+    }
+  }
+  ```
+
+- **Data files:** DC shows up as `payroll_dc_legacy`, `payroll_dc_new`, `er_dc_rate_legacy`, `er_dc_rate_new` columns in each plan's `init_funding.csv`. No DC-specific decrement files — DC members don't have mortality-driven cash flows, only account-balance accumulation.
+- **Limitations:** no vesting delay modeled, no embedded options (early-withdrawal penalties, annuitization choice). Straightforward account-balance accumulation.
+
+### 7b. Cash Balance (CB)
+
+- **Exercised today:** TRS only. FRS has no CB.
+- **Activation:** add `"cb"` to `benefit.benefit_types` **and** provide a `benefit.cash_balance` block. Both are required; just the `benefit_types` entry alone won't do anything.
+- **TRS config block:**
+
+  ```json
+  "benefit": {
+    "benefit_types": ["db", "cb", "dc"],
+    "cash_balance": {
+      "ee_pay_credit": 0.06,
+      "er_pay_credit": 0.09,
+      "vesting_yos": 5,
+      "icr_smooth_period": 5,
+      "icr_floor": 0.04,
+      "icr_cap": 0.07,
+      "icr_upside_share": 0.5,
+      "annuity_conversion_rate": 0.04,
+      "return_volatility": 0.12
+    }
+  }
+  ```
+
+- **Interest crediting rate (ICR)** is computed each year from the return scenario using a floor-cap-with-upside-share formula implemented in [src/pension\_model/core/icr.py](../src/pension_model/core/icr.py). That's the knob that makes CB interesting for policy work — change `icr_floor`, `icr_cap`, or `icr_upside_share` to change the risk-sharing shape.
+- **Limitations:** CB has not yet been validated against an external actuarial reference. Annuity conversion uses a fixed rate rather than age-based commutation factors.
+
+### 7c. Deferred Retirement Option Plan (DROP)
+
+- **Exercised today:** FRS only.
+- **Activation:** boolean flag at plan level.
+
+  ```json
+  "funding": {
+    "has_drop": true,
+    "drop_reference_class": "regular"
+  }
+  ```
+
+  `drop_reference_class` says which class's retirement rates and benefits govern DROP entry assumptions — FRS uses "regular" as a proxy for the plan as a whole.
+- **Data files:** tier-specific DROP entry probabilities at `plans/frs/baselines/decrement_tables/drop_entry_tier{1,2}.csv` — the probability an active member enters DROP by age × YOS.
+- **Limitations (from [model\_goals.md](model_goals.md)):** FRS DROP is currently modeled as a simplified adjustment to the active cohort, not as a full sub-cohort with its own state, interest credits, and cash-flow separation. This matches the reference R model but is a known limitation — full state-based DROP is on the long-term roadmap and will land when a plan with a richer DROP design requires it.
+
+### How scenarios interact with these features
+
+All three feature dicts are reachable from scenario overrides via the usual deep-merge — e.g., a scenario could set `benefit.cash_balance.icr_floor: 0.0` to stress-test the CB floor, or `funding.has_drop: false` to suspend DROP. Remember the silent-no-op gap on plans that lack the feature ([issue #44](https://github.com/donboyd5/pension_model/issues/44)) — a CB scenario run against FRS today won't error, it just won't do anything.
+
+---
+
+## 8\. Stepping through the model (optional / deeper-dive)
 
 Two ways to inspect what the code is actually doing. Use whichever matches the question.
 
-### 7a. Interactive REPL — closest to the R experience
+### 8a. Interactive REPL — closest to the R experience
 
 Open the Positron Python console and call the pipeline stages one at a time, keeping intermediates in named variables so you can inspect them (`df.head()`, `df.info()`, `df.query(...)`, `df.describe()`).
 
-> **Ready-to-paste REPL block:** *to be filled in closer to the meeting* — this depends on function names that may still change. Shape:
-> 
-> python
-> 
-> Copy
-> 
-> ```python
-> # 1. load config# 2. build benefit tables  -> inspect shape, columns, a cohort# 3. project workforce     -> inspect a year, a class# 4. aggregate liabilities -> inspect yearly totals# 5. funding model         -> inspect AVA / MVA / contribution rows
-> ```
+> **Where to run this:** from the repo root of whichever checkout has `pension-model` installed in its Python environment (usually `d:/python_projects/pension_model/`). The cells use paths relative to the repo root. In Positron, set the working directory to that folder before pasting.
 
-### 7b. VSCode / Positron debugger — true line-by-line stepping
+**Starter cells — stable, safe to try out now:**
+
+```python
+# --- cell 1: imports and config load ---
+from pathlib import Path
+from pension_model.plan_config import load_plan_config
+
+cfg = load_plan_config(Path("plans/frs/config/plan_config.json"))
+cfg.scenario_name            # None for baseline
+list(cfg.raw.keys())         # top-level config sections
+```
+
+```python
+# --- cell 2: drill into a config section ---
+cfg.raw["economic"]          # discount rates, model return, growth rates
+cfg.raw["classes"]           # list of membership classes
+cfg.raw["benefit"]["benefit_types"]   # ['db', 'dc'] for FRS, ['db', 'cb', 'dc'] for TRS
+```
+
+```python
+# --- cell 3: inspect a data file directly ---
+import pandas as pd
+
+salary = pd.read_csv("plans/frs/data/demographics/regular_salary.csv")
+salary.head()
+salary.shape
+salary.describe()
+```
+
+```python
+# --- cell 4: inspect run outputs after `pension-model run frs --no-test` ---
+summary = pd.read_csv("output/frs/summary.csv")
+summary.head()
+summary.columns.tolist()
+
+liab = pd.read_csv("output/frs/liability_stacked.csv")
+liab.head()
+```
+
+```python
+# --- cell 5: compare baseline vs a scenario output ---
+base = pd.read_csv("output/frs/summary.csv").set_index("year")
+low  = pd.read_csv("output/frs/low_return/summary.csv").set_index("year")
+(low["funded_ratio"] - base["funded_ratio"]).head(10)
+```
+
+> **Deeper cells** (call `build_plan_benefit_tables`, `project_workforce`, `run_funding_model` stage by stage): *to be filled in closer to the meeting* once the function names and signatures settle. The five cells above use only the public loader and CSV outputs, both of which are stable.
+
+### 8b. VSCode / Positron debugger — true line-by-line stepping
 
 When REPL isn’t enough, set a breakpoint and step through.
 
@@ -174,7 +289,7 @@ Mental model for an R user: the breakpoint + Variables panel is the Python analo
 
 ---
 
-## 8\. Where we are and what’s next — discussion prompts
+## 9\. Where we are and what’s next — discussion prompts
 
 **Where we are:**
 
