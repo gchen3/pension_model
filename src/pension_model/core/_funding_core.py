@@ -456,6 +456,68 @@ def _finalize_ava_with_drop(
             funding[cn] = f
 
 
+def _phase_ava_gainloss_smoothing(
+    f: pd.DataFrame, i: int, ava_strategy, dr_current: float, dr_new: float
+) -> None:
+    """Run per-leg AVA gain/loss deferral smoothing on one class's frame.
+
+    Used for plans whose AVA strategy is class-level (``aggregation_level
+    == "class"``). The 4-year deferral state is carried on the frame
+    itself via ``defer_y1_*`` through ``defer_y4_*`` columns; the
+    strategy's ``smooth`` method returns a dict of keys whose values
+    are written to ``{k}_legacy`` and ``{k}_new`` columns.
+
+    ``exp_inv_income`` / ``exp_ava`` / ``ava`` keys map to the usual
+    column names; everything else (the defer_* keys) gets the leg
+    suffix appended.
+    """
+    for leg, dr in (("legacy", dr_current), ("new", dr_new)):
+        result = ava_strategy.smooth(
+            ava_prev=f.loc[i - 1, f"ava_{leg}"],
+            net_cf=f.loc[i, f"net_cf_{leg}"],
+            mva=f.loc[i, f"mva_{leg}"],
+            dr=dr,
+            state={
+                "defer_y1_prev": f.loc[i - 1, f"defer_y1_{leg}"],
+                "defer_y2_prev": f.loc[i - 1, f"defer_y2_{leg}"],
+                "defer_y3_prev": f.loc[i - 1, f"defer_y3_{leg}"],
+                "defer_y4_prev": f.loc[i - 1, f"defer_y4_{leg}"],
+            },
+        )
+        for k, v in result.items():
+            if k == "exp_inv_income":
+                f.loc[i, f"exp_inv_income_{leg}"] = v
+            elif k == "exp_ava":
+                f.loc[i, f"exp_ava_{leg}"] = v
+            elif k == "ava":
+                f.loc[i, f"ava_{leg}"] = v
+            else:
+                f.loc[i, f"{k}_{leg}"] = v
+
+
+def _phase_real_cost_metrics(
+    f: pd.DataFrame, i: int, year: int, start_year: int, inflation: float
+) -> None:
+    """Write inflation-adjusted cost metrics for one row.
+
+    Deflates ``total_er_cont`` and ``total_ual_mva`` to real terms
+    using the supplied ``inflation`` rate, accumulates cumulative real
+    ER contributions, and writes the ``all_in_cost_real`` = cumulative
+    real cost + end-of-horizon real UAL summary.
+
+    Gainloss-path-only today; the unified compute will gate this on
+    a plan-capability flag.
+    """
+    deflator = (1 + inflation) ** (year - start_year)
+    f.loc[i, "total_er_cont_real"] = f.loc[i, "total_er_cont"] / deflator
+    f.loc[i, "cum_er_cont_real"] = (
+        f.loc[i, "total_er_cont_real"] if i == 1
+        else f.loc[i - 1, "cum_er_cont_real"] + f.loc[i, "total_er_cont_real"]
+    )
+    f.loc[i, "total_ual_mva_real"] = f.loc[i, "total_ual_mva"] / deflator
+    f.loc[i, "all_in_cost_real"] = f.loc[i, "cum_er_cont_real"] + f.loc[i, "total_ual_mva_real"]
+
+
 def _phase_ual_and_funded_ratios(f: pd.DataFrame, i: int) -> None:
     """Compute total AVA, UAL (on both AVA and MVA bases), and funded
     ratios for row ``i`` on one class's frame.
@@ -1129,51 +1191,8 @@ def _compute_funding_gainloss(
         # MVA projection
         _phase_mva(f, i, roa)
 
-        # AVA gain/loss deferral smoothing — legacy
-        ava_leg = ava_strategy.smooth(
-            ava_prev=f.loc[i - 1, "ava_legacy"],
-            net_cf=f.loc[i, "net_cf_legacy"],
-            mva=f.loc[i, "mva_legacy"],
-            dr=dr_current,
-            state={
-                "defer_y1_prev": f.loc[i - 1, "defer_y1_legacy"],
-                "defer_y2_prev": f.loc[i - 1, "defer_y2_legacy"],
-                "defer_y3_prev": f.loc[i - 1, "defer_y3_legacy"],
-                "defer_y4_prev": f.loc[i - 1, "defer_y4_legacy"],
-            },
-        )
-        for k, v in ava_leg.items():
-            if k == "exp_inv_income":
-                f.loc[i, "exp_inv_income_legacy"] = v
-            elif k == "exp_ava":
-                f.loc[i, "exp_ava_legacy"] = v
-            elif k == "ava":
-                f.loc[i, "ava_legacy"] = v
-            else:
-                f.loc[i, f"{k}_legacy"] = v
-
-        # AVA gain/loss deferral smoothing — new
-        ava_new = ava_strategy.smooth(
-            ava_prev=f.loc[i - 1, "ava_new"],
-            net_cf=f.loc[i, "net_cf_new"],
-            mva=f.loc[i, "mva_new"],
-            dr=dr_new,
-            state={
-                "defer_y1_prev": f.loc[i - 1, "defer_y1_new"],
-                "defer_y2_prev": f.loc[i - 1, "defer_y2_new"],
-                "defer_y3_prev": f.loc[i - 1, "defer_y3_new"],
-                "defer_y4_prev": f.loc[i - 1, "defer_y4_new"],
-            },
-        )
-        for k, v in ava_new.items():
-            if k == "exp_inv_income":
-                f.loc[i, "exp_inv_income_new"] = v
-            elif k == "exp_ava":
-                f.loc[i, "exp_ava_new"] = v
-            elif k == "ava":
-                f.loc[i, "ava_new"] = v
-            else:
-                f.loc[i, f"{k}_new"] = v
+        # AVA gain/loss deferral smoothing (both legs)
+        _phase_ava_gainloss_smoothing(f, i, ava_strategy, dr_current, dr_new)
 
         # Total AVA, UAL, funded ratios
         _phase_ual_and_funded_ratios(f, i)
@@ -1190,14 +1209,8 @@ def _compute_funding_gainloss(
              + f.loc[i, "er_amo_cont_new"] + f.loc[i, "solv_cont"])
             / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
 
-        # Real cost metrics
-        f.loc[i, "total_er_cont_real"] = f.loc[i, "total_er_cont"] / (1 + inflation) ** (year - start_year)
-        if i == 1:
-            f.loc[i, "cum_er_cont_real"] = f.loc[i, "total_er_cont_real"]
-        else:
-            f.loc[i, "cum_er_cont_real"] = f.loc[i - 1, "cum_er_cont_real"] + f.loc[i, "total_er_cont_real"]
-        f.loc[i, "total_ual_mva_real"] = f.loc[i, "total_ual_mva"] / (1 + inflation) ** (year - start_year)
-        f.loc[i, "all_in_cost_real"] = f.loc[i, "cum_er_cont_real"] + f.loc[i, "total_ual_mva_real"]
+        # Real cost metrics (gainloss-path-only; capability-gated once unified)
+        _phase_real_cost_metrics(f, i, year, start_year, inflation)
 
         # Amortization layer updates — current hires (legacy)
         _roll_amort_layer(
