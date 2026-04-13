@@ -290,25 +290,42 @@ def _phase_benefits_refunds(
     f.loc[i, "refund_new"] = refund_new
 
 
+def _nc_rate_agg(agg: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Write ``nc_rate`` on the aggregate frame using the canonical
+    denominator (DB legacy + DB new + CB new when applicable).
+
+    Used by the corridor path to recompute the plan-aggregate NC rate
+    after the class loop and again after DROP contributions have been
+    accumulated in.
+    """
+    denom = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
+    if ctx.has_cb:
+        denom = denom + agg.loc[i, "payroll_cb_new"]
+    agg.loc[i, "nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / denom if denom > 0 else 0
+
+
 def _phase_normal_cost(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
-    """Compute normal-cost dollars for row ``i`` on one class's frame.
+    """Compute normal-cost dollars and rate for row ``i`` on one class's frame.
 
-    Writes ``nc_legacy`` and ``nc_new``. The new-leg NC includes a CB
-    component (``nc_rate_cb_new * payroll_cb_new``) for plans with a
-    cash-balance leg, gated on ``ctx.has_cb``.
+    Writes ``nc_legacy``, ``nc_new``, and ``nc_rate``. The new-leg NC
+    includes a CB component (``nc_rate_cb_new * payroll_cb_new``) for
+    plans with a cash-balance leg.
 
-    The per-frame NC *rate* column is deliberately not written here:
-    FRS and TRS R models use different rate conventions
-    (``total_nc_rate`` with DB-only denominator vs. ``nc_rate`` with
-    total-payroll denominator) that disagree with each other and,
-    per GH #42, with the TRS AV's published definition. The rate
-    lines remain at each call site until that issue is resolved.
+    ``nc_rate`` uses the canonical denominator — the payroll on which
+    normal cost dollars are actually accrued: DB legacy + DB new + CB
+    new (when present). This excludes DC payroll (which accrues no DB
+    normal cost) and matches the TRS AV's "Projected Payroll for
+    Contributions" definition. See GH #42 for the research and
+    migration notes.
     """
     f.loc[i, "nc_legacy"] = f.loc[i, "nc_rate_db_legacy"] * f.loc[i, "payroll_db_legacy"]
     nc_new = f.loc[i, "nc_rate_db_new"] * f.loc[i, "payroll_db_new"]
+    denom = f.loc[i, "payroll_db_legacy"] + f.loc[i, "payroll_db_new"]
     if ctx.has_cb:
         nc_new = nc_new + f.loc[i, "nc_rate_cb_new"] * f.loc[i, "payroll_cb_new"]
+        denom = denom + f.loc[i, "payroll_cb_new"]
     f.loc[i, "nc_new"] = nc_new
+    f.loc[i, "nc_rate"] = (f.loc[i, "nc_legacy"] + nc_new) / denom if denom > 0 else 0
 
 
 def _phase_drop_projection(
@@ -385,8 +402,7 @@ def _phase_drop_projection(
     ])
     _accumulate_to_aggregate(agg, drop, i, ["nc_legacy", "nc_new"])
 
-    agg_pdb2 = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
-    agg.loc[i, "total_nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / agg_pdb2 if agg_pdb2 > 0 else 0
+    _nc_rate_agg(agg, i, ctx)
     agg.loc[i, "nc_rate_db_legacy"] = agg.loc[i, "nc_legacy"] / agg.loc[i, "payroll_db_legacy"] if agg.loc[i, "payroll_db_legacy"] > 0 else 0
     agg.loc[i, "nc_rate_db_new"] = agg.loc[i, "nc_new"] / agg.loc[i, "payroll_db_new"] if agg.loc[i, "payroll_db_new"] > 0 else 0
     _accumulate_to_aggregate(agg, drop, i, [
@@ -676,9 +692,6 @@ def _compute_funding_corridor(
             ])
 
             _phase_normal_cost(f, i, ctx)
-            # R-convention rate column (FRS: DB-only denominator). See GH #42.
-            pdb = f.loc[i, "payroll_db_legacy"] + f.loc[i, "payroll_db_new"]
-            f.loc[i, "total_nc_rate"] = (f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"]) / pdb if pdb > 0 else 0
             _accumulate_to_aggregate(agg, f, i, ["nc_legacy", "nc_new"])
 
             _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
@@ -689,8 +702,7 @@ def _compute_funding_corridor(
 
             funding[cn] = f
 
-        agg_pdb = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
-        agg.loc[i, "total_nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / agg_pdb if agg_pdb > 0 else 0
+        _nc_rate_agg(agg, i, ctx)
 
         # --- DROP (only for plans with has_drop=true) ---
         if has_drop:
@@ -1028,12 +1040,9 @@ def _compute_funding_gainloss(
         # Benefit payments from liability pipeline
         _phase_benefits_refunds(f, liab, i, ctx)
 
-        # Normal cost
+        # Normal cost (rate written by helper using canonical denominator — GH #42)
         _phase_normal_cost(f, i, ctx)
         payroll_new_total = f.loc[i, "payroll_db_new"] + f.loc[i, "payroll_cb_new"]
-        # R-convention rate column (TRS: total-payroll denominator, includes DC). See GH #42.
-        f.loc[i, "nc_rate"] = ((f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"])
-                                / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
 
         # Liability gain/loss + AAL roll-forward
         _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
