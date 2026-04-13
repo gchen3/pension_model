@@ -311,6 +311,31 @@ def _phase_normal_cost(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
     f.loc[i, "nc_new"] = nc_new
 
 
+def _phase_ual_and_funded_ratios(f: pd.DataFrame, i: int) -> None:
+    """Compute total AVA, UAL (on both AVA and MVA bases), and funded
+    ratios for row ``i`` on one class's frame.
+
+    Writes ``total_ava``, ``ual_ava_legacy/new``, ``total_ual_ava``,
+    ``ual_mva_legacy/new``, ``total_ual_mva``, ``fr_mva``, and
+    ``fr_ava``. Reads the already-written ``ava_legacy/new``,
+    ``aal_legacy/new``, ``total_aal``, ``mva_legacy/new``,
+    ``total_mva``.
+    """
+    f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
+
+    f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
+    f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
+    f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
+
+    f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
+    f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
+    f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
+
+    total_aal = f.loc[i, "total_aal"]
+    f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / total_aal if total_aal != 0 else 0
+    f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / total_aal if total_aal != 0 else 0
+
+
 def _phase_mva(f: pd.DataFrame, i: int, roa: float) -> None:
     """Roll MVA forward one year for both legs.
 
@@ -734,26 +759,16 @@ def _compute_funding_corridor(
         # --- UAL, funded ratios ---
         for cn in all_classes:
             f = funding[cn]
-            f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
+            _phase_ual_and_funded_ratios(f, i)
             _accumulate_to_aggregate(agg, f, i, ["total_ava"])
-
-            f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
-            f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
-            f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "ual_ava_legacy", "ual_ava_new", "total_ual_ava",
             ])
-
-            f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
-            f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
-            f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "ual_mva_legacy", "ual_mva_new", "total_ual_mva",
             ])
 
-            f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-            f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-
+            # Plan-specific er_cont composition (FRS: db+dc+solv; see GH #43 for solv_cont naming).
             f.loc[i, "total_er_cont"] = f.loc[i, "total_er_db_cont"] + f.loc[i, "total_er_dc_cont"] + f.loc[i, "total_solv_cont"]
             _accumulate_to_aggregate(agg, f, i, ["total_er_cont"])
             f.loc[i, "total_er_cont_rate"] = f.loc[i, "total_er_cont"] / f.loc[i, "total_payroll"] if f.loc[i, "total_payroll"] > 0 else 0
@@ -1074,19 +1089,8 @@ def _compute_funding_gainloss(
             else:
                 f.loc[i, f"{k}_new"] = v
 
-        f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
-
-        # UAL and funded ratios
-        f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
-        f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
-        f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
-
-        f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
-        f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
-        f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
-
-        f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-        f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
+        # Total AVA, UAL, funded ratios
+        _phase_ual_and_funded_ratios(f, i)
 
         # Contribution totals
         f.loc[i, "total_er_cont"] = (f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
