@@ -756,14 +756,14 @@ def _compute_funding_corridor(
                       + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
                       - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
 
-            f.loc[i, "total_solv_cont"] = _solvency_cont(
+            f.loc[i, "solv_cont"] = _solvency_cont(
                 mva_prev=f.loc[i - 1, "total_mva"],
                 cf_total=cf_leg + cf_new,
                 roa=roa,
             )
             if f.loc[i, "total_aal"] > 0:
-                f.loc[i, "solv_cont_legacy"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
-                f.loc[i, "solv_cont_new"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
+                f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
+                f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
 
             f.loc[i, "net_cf_legacy"] = cf_leg + f.loc[i, "solv_cont_legacy"]
             f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
@@ -825,7 +825,7 @@ def _compute_funding_corridor(
             ])
 
             # Plan-specific er_cont composition (FRS: db+dc+solv; see GH #43 for solv_cont naming).
-            f.loc[i, "total_er_cont"] = f.loc[i, "total_er_db_cont"] + f.loc[i, "total_er_dc_cont"] + f.loc[i, "total_solv_cont"]
+            f.loc[i, "total_er_cont"] = f.loc[i, "total_er_db_cont"] + f.loc[i, "total_er_dc_cont"] + f.loc[i, "solv_cont"]
             _accumulate_to_aggregate(agg, f, i, ["total_er_cont"])
             f.loc[i, "total_er_cont_rate"] = f.loc[i, "total_er_cont"] / f.loc[i, "total_payroll"] if f.loc[i, "total_payroll"] > 0 else 0
             funding[cn] = f
