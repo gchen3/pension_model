@@ -67,7 +67,7 @@ def test_stage3_mortality_matches_excel(class_name, frs_config, raw_dir):
     from pension_model.core.data_loader import _build_mortality_from_csv
     from pension_model.core.mortality_builder import build_compact_mortality_from_excel
 
-    mort_dir = Path(__file__).parent.parent.parent / "data" / "frs" / "mortality"
+    mort_dir = Path(__file__).parent.parent.parent / "plans" / "frs" / "data" / "mortality"
     pub2010 = raw_dir / "pub-2010-headcount-mort-rates.xlsx"
     mp2018 = raw_dir / "mortality-improvement-scale-mp-2018-rates.xlsx"
 
@@ -107,7 +107,7 @@ def test_stage3_mortality_uses_safety_table(class_name, frs_config):
     from pension_model.core.data_loader import _build_mortality_from_csv
     from pension_model.core.mortality_builder import build_compact_mortality_from_csv
 
-    mort_dir = Path(__file__).parent.parent.parent / "data" / "frs" / "mortality"
+    mort_dir = Path(__file__).parent.parent.parent / "plans" / "frs" / "data" / "mortality"
     if not mort_dir.exists():
         pytest.skip("Stage 3 mortality CSVs not available")
 
@@ -149,7 +149,7 @@ def test_adj_ratio_handles_long_format(class_name, frs_config):
     """
     from pension_model.core.pipeline import compute_adjustment_ratio
 
-    demo_dir = Path(__file__).parent.parent.parent / "data" / "frs" / "demographics"
+    demo_dir = Path(__file__).parent.parent.parent / "plans" / "frs" / "data" / "demographics"
     if not demo_dir.exists():
         pytest.skip("Stage 3 demographics not available")
 

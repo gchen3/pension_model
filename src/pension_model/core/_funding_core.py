@@ -95,6 +95,11 @@ class FundingContext:
     drop_ref_class: Optional[str]
     all_classes: list  # class_names + ["drop"] if has_drop
 
+    # Plan capabilities — derived from config or schema; each field
+    # earns its place via at least one phase-helper consumer.
+    has_cb: bool  # cash-balance leg present (benefit_types contains "cb")
+    has_dc: bool  # DC leg flows through the funding frame (schema-driven)
+
     # Raw config sub-maps (for legacy paths that still read funding_raw)
     funding_policy: str
     return_scen_col: str
@@ -147,6 +152,14 @@ def _resolve_funding_context(
     drop_ref_class = funding_raw.get("drop_reference_class", class_names[0]) if class_names else None
     all_classes = class_names + (["drop"] if has_drop else [])
 
+    # Plan capabilities
+    has_cb = "cb" in constants.benefit_types
+    # has_dc is schema-driven: TRS has "dc" in benefit_types but its ORP
+    # is outside the trust and its funding frame has no DC columns, so
+    # benefit_types is the wrong source. The init_funding schema is
+    # authoritative for what columns the funding model expects to read/write.
+    has_dc = "payroll_dc_legacy" in funding_inputs["init_funding"].columns
+
     # Strategy selection
     method = (fund.ava_smoothing or {}).get("method")
     if method == "corridor":
@@ -195,6 +208,8 @@ def _resolve_funding_context(
         has_drop=has_drop,
         drop_ref_class=drop_ref_class,
         all_classes=all_classes,
+        has_cb=has_cb,
+        has_dc=has_dc,
         funding_policy=fund.funding_policy,
         return_scen_col=raw.get("economic", {}).get("return_scen", "assumption"),
         init_funding=funding_inputs["init_funding"],
@@ -223,6 +238,555 @@ def _resolve_er_rate_components(funding_raw: dict) -> list:
             "plans/txtrs/config/plan_config.json for an example schema."
         )
     return [RateComponent.from_config(c) for c in components]
+
+
+# ---------------------------------------------------------------------------
+# Year-loop phase helpers
+#
+# Each helper executes one phase of the year loop for one class's funding
+# frame. They're called from both compute functions with the same
+# signature so the two bodies converge on a common shape.
+# ---------------------------------------------------------------------------
+
+
+def _phase_payroll(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Project payroll columns for row ``i`` on one class's frame.
+
+    Writes ``total_payroll``, ``payroll_db_legacy``, ``payroll_db_new``,
+    and (when the plan has a cash-balance leg) ``payroll_cb_new``.
+
+    DC-leg payroll (``payroll_dc_legacy`` / ``payroll_dc_new``) and
+    plan-aggregate accumulation remain at the call site for now; they
+    move into helpers in later phase-extraction commits.
+    """
+    f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + ctx.payroll_growth)
+    f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
+    f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
+    if ctx.has_cb:
+        f.loc[i, "payroll_cb_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_cb_new_ratio"]
+    if ctx.has_dc:
+        f.loc[i, "payroll_dc_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_legacy_ratio"]
+        f.loc[i, "payroll_dc_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_new_ratio"]
+
+
+def _phase_dc_contributions(f: pd.DataFrame, i: int) -> None:
+    """Compute DC employer contribution dollars for one class's row.
+
+    Writes ``er_dc_cont_legacy``, ``er_dc_cont_new``, and the total
+    ``total_er_dc_cont``. Assumes the per-leg DC rates
+    (``er_dc_rate_legacy/new``) and DC payrolls have already been
+    written onto the row — DC rates are set at the call site because
+    they depend on plan config (the class's ``er_dc_cont_rate``) and
+    on DROP-cohort special-casing.
+
+    Used only when the plan has a DC leg flowing through the funding
+    frame (``ctx.has_dc``).
+    """
+    f.loc[i, "er_dc_cont_legacy"] = f.loc[i, "er_dc_rate_legacy"] * f.loc[i, "payroll_dc_legacy"]
+    f.loc[i, "er_dc_cont_new"] = f.loc[i, "er_dc_rate_new"] * f.loc[i, "payroll_dc_new"]
+    f.loc[i, "total_er_dc_cont"] = f.loc[i, "er_dc_cont_legacy"] + f.loc[i, "er_dc_cont_new"]
+
+
+def _phase_benefits_refunds(
+    f: pd.DataFrame, liab: pd.DataFrame, i: int, ctx: FundingContext
+) -> None:
+    """Copy benefit payments and refunds from the liability pipeline.
+
+    Writes ``ben_payment_legacy`` (active + current retiree + term),
+    ``refund_legacy``, ``ben_payment_new``, and ``refund_new``. For
+    plans with a cash-balance leg, CB contributions are added to the
+    ``*_new`` columns; for DB-only plans, only the DB component is
+    read.
+
+    Plan-aggregate totals (``total_ben_payment``, ``total_refund``)
+    and aggregate accumulation remain at the call site because they're
+    corridor-only.
+    """
+    f.loc[i, "ben_payment_legacy"] = (
+        liab["retire_ben_db_legacy_est"].iloc[i]
+        + liab["retire_ben_current_est"].iloc[i]
+        + liab["retire_ben_term_est"].iloc[i]
+    )
+    f.loc[i, "refund_legacy"] = liab["refund_db_legacy_est"].iloc[i]
+
+    ben_new = liab["retire_ben_db_new_est"].iloc[i]
+    refund_new = liab["refund_db_new_est"].iloc[i]
+    if ctx.has_cb:
+        ben_new = ben_new + liab["retire_ben_cb_new_est"].iloc[i]
+        refund_new = refund_new + liab["refund_cb_new_est"].iloc[i]
+    f.loc[i, "ben_payment_new"] = ben_new
+    f.loc[i, "refund_new"] = refund_new
+
+
+def _prepare_return_scenarios(ctx: FundingContext, dr_current: float) -> pd.DataFrame:
+    """Apply projection overrides to the return-scenarios frame.
+
+    ``ret_scen["model"]`` and ``ret_scen["assumption"]`` get written
+    with ``ctx.model_return`` and ``dr_current`` respectively. The AVA
+    strategy decides whether the override applies to all rows or only
+    to projected rows (year >= start_year + 2) — corridor preserves
+    the first two rows' CSV values; gainloss overrides unconditionally.
+
+    Mutates a copy of ``ctx.ret_scen`` and returns it; ctx is unchanged.
+    """
+    rs = ctx.ret_scen
+    if ctx.ava_strategy.ret_scen_gates_projection:
+        first_proj_year = ctx.start_year + 2
+        mask = rs["year"] >= first_proj_year
+        rs.loc[mask, "model"] = ctx.model_return
+        rs.loc[mask, "assumption"] = dr_current
+    else:
+        rs["model"] = ctx.model_return
+        rs["assumption"] = dr_current
+    return rs
+
+
+def _nc_rate_agg(agg: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Write ``nc_rate`` on the aggregate frame using the canonical
+    denominator (DB legacy + DB new + CB new when applicable).
+
+    Used by the corridor path to recompute the plan-aggregate NC rate
+    after the class loop and again after DROP contributions have been
+    accumulated in.
+    """
+    denom = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
+    if ctx.has_cb:
+        denom = denom + agg.loc[i, "payroll_cb_new"]
+    agg.loc[i, "nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / denom if denom > 0 else 0
+
+
+def _phase_normal_cost(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Compute normal-cost dollars and rate for row ``i`` on one class's frame.
+
+    Writes ``nc_legacy``, ``nc_new``, and ``nc_rate``. The new-leg NC
+    includes a CB component (``nc_rate_cb_new * payroll_cb_new``) for
+    plans with a cash-balance leg.
+
+    ``nc_rate`` uses the canonical denominator — the payroll on which
+    normal cost dollars are actually accrued: DB legacy + DB new + CB
+    new (when present). This excludes DC payroll (which accrues no DB
+    normal cost) and matches the TRS AV's "Projected Payroll for
+    Contributions" definition. See GH #42 for the research and
+    migration notes.
+    """
+    f.loc[i, "nc_legacy"] = f.loc[i, "nc_rate_db_legacy"] * f.loc[i, "payroll_db_legacy"]
+    nc_new = f.loc[i, "nc_rate_db_new"] * f.loc[i, "payroll_db_new"]
+    denom = f.loc[i, "payroll_db_legacy"] + f.loc[i, "payroll_db_new"]
+    if ctx.has_cb:
+        nc_new = nc_new + f.loc[i, "nc_rate_cb_new"] * f.loc[i, "payroll_cb_new"]
+        denom = denom + f.loc[i, "payroll_cb_new"]
+    f.loc[i, "nc_new"] = nc_new
+    f.loc[i, "nc_rate"] = (f.loc[i, "nc_legacy"] + nc_new) / denom if denom > 0 else 0
+
+
+def _phase_drop_projection(
+    funding: dict, agg: pd.DataFrame, i: int, ctx: FundingContext
+) -> None:
+    """Project the DROP cohort and accumulate it into the aggregate.
+
+    Scales the DROP frame's payroll by ``ctx.payroll_growth``, pulls
+    benefit/refund shares from the reference class (``ctx.drop_ref_class``)
+    using R's mechanical-share logic, reuses the aggregate's realized
+    NC rates to compute DROP NC dollars, and rolls DROP AAL forward
+    with a mid-year-cashflow convention.
+
+    Then accumulates the DROP frame into ``agg`` and recomputes the
+    aggregate's NC rate columns (which were computed in the class loop
+    before DROP was added).
+
+    Corridor-only: ``_compute_funding_gainloss`` has no DROP path.
+    """
+    drop = funding["drop"]
+    reg = funding[ctx.drop_ref_class]
+
+    drop.loc[i, "total_payroll"] = drop.loc[i - 1, "total_payroll"] * (1 + ctx.payroll_growth)
+    drop.loc[i, "payroll_db_legacy"] = drop.loc[i, "total_payroll"] * (
+        reg.loc[i, "payroll_db_legacy_ratio"] + reg.loc[i, "payroll_dc_legacy_ratio"]
+    )
+    drop.loc[i, "payroll_db_new"] = drop.loc[i, "total_payroll"] * (
+        reg.loc[i, "payroll_db_new_ratio"] + reg.loc[i, "payroll_dc_new_ratio"]
+    )
+
+    if reg.loc[i - 1, "total_ben_payment"] > 0:
+        drop.loc[i, "total_ben_payment"] = (
+            drop.loc[i - 1, "total_ben_payment"]
+            * reg.loc[i, "total_ben_payment"] / reg.loc[i - 1, "total_ben_payment"]
+        )
+    if reg.loc[i - 1, "total_refund"] > 0:
+        drop.loc[i, "total_refund"] = (
+            drop.loc[i - 1, "total_refund"]
+            * reg.loc[i, "total_refund"] / reg.loc[i - 1, "total_refund"]
+        )
+
+    if reg.loc[i, "total_ben_payment"] > 0:
+        drop.loc[i, "ben_payment_legacy"] = drop.loc[i, "total_ben_payment"] * reg.loc[i, "ben_payment_legacy"] / reg.loc[i, "total_ben_payment"]
+        drop.loc[i, "ben_payment_new"] = drop.loc[i, "total_ben_payment"] * reg.loc[i, "ben_payment_new"] / reg.loc[i, "total_ben_payment"]
+    if reg.loc[i, "total_refund"] > 0:
+        drop.loc[i, "refund_legacy"] = drop.loc[i, "total_refund"] * reg.loc[i, "refund_legacy"] / reg.loc[i, "total_refund"]
+        drop.loc[i, "refund_new"] = drop.loc[i, "total_refund"] * reg.loc[i, "refund_new"] / reg.loc[i, "total_refund"]
+
+    drop.loc[i, "nc_rate_db_legacy"] = agg.loc[i, "nc_legacy"] / agg.loc[i, "payroll_db_legacy"] if agg.loc[i, "payroll_db_legacy"] > 0 else 0
+    drop.loc[i, "nc_rate_db_new"] = agg.loc[i, "nc_new"] / agg.loc[i, "payroll_db_new"] if agg.loc[i, "payroll_db_new"] > 0 else 0
+    drop.loc[i, "nc_legacy"] = drop.loc[i, "nc_rate_db_legacy"] * drop.loc[i, "payroll_db_legacy"]
+    drop.loc[i, "nc_new"] = drop.loc[i, "nc_rate_db_new"] * drop.loc[i, "payroll_db_new"]
+
+    drop.loc[i, "aal_legacy"] = (
+        drop.loc[i - 1, "aal_legacy"] * (1 + ctx.dr_current)
+        + (drop.loc[i, "nc_legacy"] - drop.loc[i, "ben_payment_legacy"] - drop.loc[i, "refund_legacy"])
+        * (1 + ctx.dr_current) ** 0.5
+    )
+    drop.loc[i, "aal_new"] = (
+        drop.loc[i - 1, "aal_new"] * (1 + ctx.dr_new)
+        + (drop.loc[i, "nc_new"] - drop.loc[i, "ben_payment_new"] - drop.loc[i, "refund_new"])
+        * (1 + ctx.dr_new) ** 0.5
+    )
+    drop.loc[i, "total_aal"] = drop.loc[i, "aal_legacy"] + drop.loc[i, "aal_new"]
+    funding["drop"] = drop
+
+    _accumulate_to_aggregate(agg, drop, i, [
+        "total_payroll", "payroll_db_legacy", "payroll_db_new",
+    ])
+    _accumulate_to_aggregate(agg, drop, i, [
+        "ben_payment_legacy", "refund_legacy",
+        "ben_payment_new", "refund_new",
+        "total_ben_payment", "total_refund",
+    ])
+    _accumulate_to_aggregate(agg, drop, i, ["nc_legacy", "nc_new"])
+
+    _nc_rate_agg(agg, i, ctx)
+    agg.loc[i, "nc_rate_db_legacy"] = agg.loc[i, "nc_legacy"] / agg.loc[i, "payroll_db_legacy"] if agg.loc[i, "payroll_db_legacy"] > 0 else 0
+    agg.loc[i, "nc_rate_db_new"] = agg.loc[i, "nc_new"] / agg.loc[i, "payroll_db_new"] if agg.loc[i, "payroll_db_new"] > 0 else 0
+    _accumulate_to_aggregate(agg, drop, i, [
+        "aal_legacy", "aal_new", "total_aal",
+    ])
+
+
+def _finalize_ava_with_drop(
+    funding: dict, agg: pd.DataFrame, i: int, ctx: FundingContext
+) -> None:
+    """Post-smoothing AVA finalization, with DROP reallocation when applicable.
+
+    When ``ctx.has_drop``: computes the DROP's net AVA reallocation so
+    that its AVA share matches its AAL share of the aggregate, applies
+    it to the DROP frame, then redistributes the offset across the
+    regular classes in proportion to their AAL.
+
+    When no DROP: simply copies each class's ``unadj_ava_*`` to the
+    final ``ava_*`` columns.
+
+    Corridor-only: ``_compute_funding_gainloss`` is per-class smoothing
+    and has no aggregate reallocation step.
+    """
+    if ctx.has_drop:
+        drop = funding["drop"]
+        if agg.loc[i, "aal_legacy"] != 0:
+            drop.loc[i, "net_reallocation_legacy"] = drop.loc[i, "unadj_ava_legacy"] - drop.loc[i, "aal_legacy"] * agg.loc[i, "ava_legacy"] / agg.loc[i, "aal_legacy"]
+        drop.loc[i, "ava_legacy"] = drop.loc[i, "unadj_ava_legacy"] - drop.loc[i, "net_reallocation_legacy"]
+        if agg.loc[i, "aal_new"] != 0:
+            drop.loc[i, "net_reallocation_new"] = drop.loc[i, "unadj_ava_new"] - drop.loc[i, "aal_new"] * agg.loc[i, "ava_new"] / agg.loc[i, "aal_new"]
+        drop.loc[i, "ava_new"] = drop.loc[i, "unadj_ava_new"] - drop.loc[i, "net_reallocation_new"]
+        funding["drop"] = drop
+
+        for cn in ctx.class_names:
+            f = funding[cn]
+            agg_ex_drop_leg = agg.loc[i, "aal_legacy"] - drop.loc[i, "aal_legacy"]
+            prop_leg = f.loc[i, "aal_legacy"] / agg_ex_drop_leg if agg_ex_drop_leg != 0 else 0
+            f.loc[i, "net_reallocation_legacy"] = prop_leg * drop.loc[i, "net_reallocation_legacy"]
+            f.loc[i, "ava_legacy"] = f.loc[i, "unadj_ava_legacy"] + f.loc[i, "net_reallocation_legacy"]
+
+            agg_ex_drop_new = agg.loc[i, "aal_new"] - drop.loc[i, "aal_new"]
+            prop_new = f.loc[i, "aal_new"] / agg_ex_drop_new if agg_ex_drop_new != 0 else 0
+            f.loc[i, "net_reallocation_new"] = prop_new * drop.loc[i, "net_reallocation_new"]
+            f.loc[i, "ava_new"] = f.loc[i, "unadj_ava_new"] + f.loc[i, "net_reallocation_new"]
+            funding[cn] = f
+    else:
+        for cn in ctx.class_names:
+            f = funding[cn]
+            f.loc[i, "ava_legacy"] = f.loc[i, "unadj_ava_legacy"]
+            f.loc[i, "ava_new"] = f.loc[i, "unadj_ava_new"]
+            funding[cn] = f
+
+
+def _phase_ava_corridor_smoothing(
+    agg: pd.DataFrame, i: int, ava_strategy, dr_current: float, dr_new: float
+) -> None:
+    """Run plan-aggregate corridor AVA smoothing for both legs.
+
+    Used for plans whose AVA strategy is plan-level (``aggregation_level
+    == "plan"``). Calls ``ava_strategy.smooth`` once per leg against
+    the aggregate frame and writes ``exp_inv_earnings_ava_*``,
+    ``exp_ava_*``, ``ava_*``, ``alloc_inv_earnings_ava_*``, and
+    ``ava_base_*`` onto ``agg.loc[i, :]``.
+
+    The corridor strategy carries no extra state between years, so
+    ``state`` is always an empty dict. The per-class reallocation of
+    the aggregate's realized earnings is handled separately by
+    ``ava_strategy.allocate_to_classes``.
+    """
+    for leg, dr in (("legacy", dr_current), ("new", dr_new)):
+        result = ava_strategy.smooth(
+            ava_prev=agg.loc[i - 1, f"ava_{leg}"],
+            net_cf=agg.loc[i, f"net_cf_{leg}"],
+            mva=agg.loc[i, f"mva_{leg}"],
+            dr=dr,
+            state={},
+        )
+        agg.loc[i, f"exp_inv_earnings_ava_{leg}"] = result["exp_inv_earnings_ava"]
+        agg.loc[i, f"exp_ava_{leg}"] = result["exp_ava"]
+        agg.loc[i, f"ava_{leg}"] = result["ava"]
+        agg.loc[i, f"alloc_inv_earnings_ava_{leg}"] = result["alloc_inv_earnings_ava"]
+        agg.loc[i, f"ava_base_{leg}"] = result["ava_base"]
+
+
+def _phase_ava_gainloss_smoothing(
+    f: pd.DataFrame, i: int, ava_strategy, dr_current: float, dr_new: float
+) -> None:
+    """Run per-leg AVA gain/loss deferral smoothing on one class's frame.
+
+    Used for plans whose AVA strategy is class-level (``aggregation_level
+    == "class"``). The 4-year deferral state is carried on the frame
+    itself via ``defer_y1_*`` through ``defer_y4_*`` columns; the
+    strategy's ``smooth`` method returns a dict of keys whose values
+    are written to ``{k}_legacy`` and ``{k}_new`` columns.
+
+    ``exp_inv_income`` / ``exp_ava`` / ``ava`` keys map to the usual
+    column names; everything else (the defer_* keys) gets the leg
+    suffix appended.
+    """
+    for leg, dr in (("legacy", dr_current), ("new", dr_new)):
+        result = ava_strategy.smooth(
+            ava_prev=f.loc[i - 1, f"ava_{leg}"],
+            net_cf=f.loc[i, f"net_cf_{leg}"],
+            mva=f.loc[i, f"mva_{leg}"],
+            dr=dr,
+            state={
+                "defer_y1_prev": f.loc[i - 1, f"defer_y1_{leg}"],
+                "defer_y2_prev": f.loc[i - 1, f"defer_y2_{leg}"],
+                "defer_y3_prev": f.loc[i - 1, f"defer_y3_{leg}"],
+                "defer_y4_prev": f.loc[i - 1, f"defer_y4_{leg}"],
+            },
+        )
+        for k, v in result.items():
+            if k == "exp_inv_income":
+                f.loc[i, f"exp_inv_income_{leg}"] = v
+            elif k == "exp_ava":
+                f.loc[i, f"exp_ava_{leg}"] = v
+            elif k == "ava":
+                f.loc[i, f"ava_{leg}"] = v
+            else:
+                f.loc[i, f"{k}_{leg}"] = v
+
+
+def _phase_real_cost_metrics(
+    f: pd.DataFrame, i: int, year: int, start_year: int, inflation: float
+) -> None:
+    """Write inflation-adjusted cost metrics for one row.
+
+    Deflates ``total_er_cont`` and ``total_ual_mva`` to real terms
+    using the supplied ``inflation`` rate, accumulates cumulative real
+    ER contributions, and writes the ``all_in_cost_real`` = cumulative
+    real cost + end-of-horizon real UAL summary.
+
+    Gainloss-path-only today; the unified compute will gate this on
+    a plan-capability flag.
+    """
+    deflator = (1 + inflation) ** (year - start_year)
+    f.loc[i, "total_er_cont_real"] = f.loc[i, "total_er_cont"] / deflator
+    f.loc[i, "cum_er_cont_real"] = (
+        f.loc[i, "total_er_cont_real"] if i == 1
+        else f.loc[i - 1, "cum_er_cont_real"] + f.loc[i, "total_er_cont_real"]
+    )
+    f.loc[i, "total_ual_mva_real"] = f.loc[i, "total_ual_mva"] / deflator
+    f.loc[i, "all_in_cost_real"] = f.loc[i, "cum_er_cont_real"] + f.loc[i, "total_ual_mva_real"]
+
+
+def _phase_er_cont_totals(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Write aggregate employer contribution dollars and rate.
+
+    ``total_er_cont`` is the sum of all employer outflows that hit
+    the plan in year ``i``: ER NC, ER amortization, ER DC (when the
+    plan has a DC leg), and the solvency contribution. ``total_er_cont_rate``
+    is that total divided by total payroll.
+
+    Written for every class (and the aggregate, via ``_accumulate_to_aggregate``
+    followed by a caller-side rate re-division for the aggregate).
+    """
+    total = (
+        f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
+        + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"]
+        + f.loc[i, "solv_cont"]
+    )
+    if ctx.has_dc:
+        total = total + f.loc[i, "total_er_dc_cont"]
+    f.loc[i, "total_er_cont"] = total
+    total_payroll = f.loc[i, "total_payroll"]
+    f.loc[i, "total_er_cont_rate"] = total / total_payroll if total_payroll > 0 else 0
+
+
+def _phase_ual_and_funded_ratios(f: pd.DataFrame, i: int) -> None:
+    """Compute total AVA, UAL (on both AVA and MVA bases), and funded
+    ratios for row ``i`` on one class's frame.
+
+    Writes ``total_ava``, ``ual_ava_legacy/new``, ``total_ual_ava``,
+    ``ual_mva_legacy/new``, ``total_ual_mva``, ``fr_mva``, and
+    ``fr_ava``. Reads the already-written ``ava_legacy/new``,
+    ``aal_legacy/new``, ``total_aal``, ``mva_legacy/new``,
+    ``total_mva``.
+    """
+    f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
+
+    f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
+    f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
+    f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
+
+    f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
+    f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
+    f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
+
+    total_aal = f.loc[i, "total_aal"]
+    f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / total_aal if total_aal != 0 else 0
+    f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / total_aal if total_aal != 0 else 0
+
+
+def _phase_contributions(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Compute admin-expense rate and per-leg contribution dollars.
+
+    Reads rates that the contribution strategy has already written via
+    ``cont_strategy.compute_rates`` (``ee_nc_rate_*``, ``er_nc_rate_*``,
+    ``amo_rate_*``) and multiplies them by the applicable payroll
+    bases, writing eight dollar columns:
+
+        ee_nc_cont_legacy, ee_nc_cont_new
+        admin_exp_legacy, admin_exp_new
+        er_nc_cont_legacy, er_nc_cont_new       (includes admin_exp)
+        er_amo_cont_legacy, er_amo_cont_new
+
+    Also rolls ``admin_exp_rate`` forward from the prior row.
+
+    The new-leg denominator is ``payroll_db_new + payroll_cb_new``
+    when the plan has a cash-balance leg, else ``payroll_db_new``
+    alone. Applies to EE, admin, ER NC, and ER amo for the new leg.
+
+    Amortization uses the statutory (DB-payroll-denominator)
+    convention for both legs — the only convention exercised by
+    current plans.
+    """
+    f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
+
+    payroll_new = f.loc[i, "payroll_db_new"]
+    if ctx.has_cb:
+        payroll_new = payroll_new + f.loc[i, "payroll_cb_new"]
+
+    f.loc[i, "ee_nc_cont_legacy"] = f.loc[i, "ee_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "ee_nc_cont_new"] = f.loc[i, "ee_nc_rate_new"] * payroll_new
+
+    f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * payroll_new
+
+    f.loc[i, "er_nc_cont_legacy"] = (
+        f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+        + f.loc[i, "admin_exp_legacy"]
+    )
+    f.loc[i, "er_nc_cont_new"] = (
+        f.loc[i, "er_nc_rate_new"] * payroll_new
+        + f.loc[i, "admin_exp_new"]
+    )
+
+    f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * payroll_new
+
+
+def _phase_cash_flow_and_solvency(f: pd.DataFrame, i: int, roa: float) -> None:
+    """Compute DB cash flows, the solvency contribution, and net cash flow.
+
+    Reads per-leg contributions (``ee_nc_cont_*``, ``er_nc_cont_*``,
+    ``er_amo_cont_*``, ``admin_exp_*``) and liability outflows
+    (``ben_payment_*``, ``refund_*``) off the frame for year ``i``.
+
+    Writes ``solv_cont`` (the aggregate solvency top-up required to
+    keep MVA non-negative), splits it across legs by AAL share, and
+    writes ``net_cf_legacy`` / ``net_cf_new`` — the operational cash
+    flow that feeds the MVA roll-forward.
+
+    DC contributions are deliberately excluded from cash flow: DC money
+    is paid directly to member accounts and never flows through the DB
+    fund.
+    """
+    cf_legacy = (
+        f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
+        + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
+        - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"]
+    )
+    cf_new = (
+        f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
+        + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
+        - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"]
+    )
+
+    f.loc[i, "solv_cont"] = _solvency_cont(
+        mva_prev=f.loc[i - 1, "total_mva"],
+        cf_total=cf_legacy + cf_new,
+        roa=roa,
+    )
+    if f.loc[i, "total_aal"] > 0:
+        f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
+        f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
+
+    f.loc[i, "net_cf_legacy"] = cf_legacy + f.loc[i, "solv_cont_legacy"]
+    f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+
+
+def _phase_mva(f: pd.DataFrame, i: int, roa: float) -> None:
+    """Roll MVA forward one year for both legs.
+
+    Reads ``net_cf_legacy`` / ``net_cf_new`` and the prior-year
+    ``mva_legacy`` / ``mva_new`` off the frame and writes the new
+    year's ``mva_legacy``, ``mva_new``, and ``total_mva``.
+
+    The caller is responsible for having written ``net_cf_*`` first
+    (i.e. contributions, solvency, and the net cash-flow combination
+    must already be done on row ``i``).
+    """
+    f.loc[i, "mva_legacy"] = _mva_rollforward(
+        f.loc[i - 1, "mva_legacy"], f.loc[i, "net_cf_legacy"], roa)
+    f.loc[i, "mva_new"] = _mva_rollforward(
+        f.loc[i - 1, "mva_new"], f.loc[i, "net_cf_new"], roa)
+    f.loc[i, "total_mva"] = f.loc[i, "mva_legacy"] + f.loc[i, "mva_new"]
+
+
+def _phase_liability_gl_and_aal(
+    f: pd.DataFrame, liab: pd.DataFrame, i: int, dr_current: float, dr_new: float
+) -> None:
+    """Copy liability gain/loss and roll the AAL forward for both legs.
+
+    Reads ``liability_gain_loss_legacy_est`` / ``liability_gain_loss_new_est``
+    from the liability pipeline output (always populated — see
+    pipeline.py), runs ``_aal_rollforward`` for each leg, and writes
+    ``aal_legacy``, ``aal_new``, ``total_aal``.
+
+    The gainloss-path ``liability_gain_loss = legacy + new`` sum column
+    is corridor-schema-absent and stays inline in that caller.
+    """
+    f.loc[i, "liability_gain_loss_legacy"] = liab["liability_gain_loss_legacy_est"].iloc[i]
+    f.loc[i, "liability_gain_loss_new"] = liab["liability_gain_loss_new_est"].iloc[i]
+
+    f.loc[i, "aal_legacy"] = _aal_rollforward(
+        aal_prev=f.loc[i - 1, "aal_legacy"],
+        nc=f.loc[i, "nc_legacy"],
+        ben=f.loc[i, "ben_payment_legacy"],
+        refund=f.loc[i, "refund_legacy"],
+        liab_gl=f.loc[i, "liability_gain_loss_legacy"],
+        dr=dr_current,
+    )
+    f.loc[i, "aal_new"] = _aal_rollforward(
+        aal_prev=f.loc[i - 1, "aal_new"],
+        nc=f.loc[i, "nc_new"],
+        ben=f.loc[i, "ben_payment_new"],
+        refund=f.loc[i, "refund_new"],
+        liab_gl=f.loc[i, "liability_gain_loss_new"],
+        dr=dr_new,
+    )
+    f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
 
 
 def _compute_funding_corridor(
@@ -268,16 +832,7 @@ def _compute_funding_corridor(
     init_funding = ctx.init_funding
     amort_layers = ctx.amort_layers
 
-    # Return scenario setup — select which column of return_scenarios to use.
-    # Corridor path: years 0 and 1 keep their CSV values (actual realized
-    # return); years >= start_year + 2 get overridden with model_return /
-    # dr_current for the projected path. Gainloss path overrides
-    # unconditionally — that asymmetry is load-bearing (bit-identity
-    # risk #7) and is handled by Step 2.F (not yet wired).
-    ret_scen = ctx.ret_scen
-    first_proj_year = ctx.start_year + 2
-    ret_scen.loc[ret_scen["year"] >= first_proj_year, "model"] = ctx.model_return
-    ret_scen.loc[ret_scen["year"] >= first_proj_year, "assumption"] = dr_current
+    ret_scen = _prepare_return_scenarios(ctx, dr_current)
 
     # Initialize funding tables
     funding = {}
@@ -363,22 +918,14 @@ def _compute_funding_corridor(
             f = funding[cn]
             liab = liability_results[cn]
 
-            f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + payroll_growth)
-            f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
-            f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
-            f.loc[i, "payroll_dc_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_legacy_ratio"]
-            f.loc[i, "payroll_dc_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_new_ratio"]
+            _phase_payroll(f, i, ctx)
 
             _accumulate_to_aggregate(agg, f, i, [
                 "total_payroll", "payroll_db_legacy", "payroll_db_new",
                 "payroll_dc_legacy", "payroll_dc_new",
             ])
 
-            f.loc[i, "ben_payment_legacy"] = (liab["retire_ben_db_legacy_est"].iloc[i]
-                + liab["retire_ben_current_est"].iloc[i] + liab["retire_ben_term_est"].iloc[i])
-            f.loc[i, "refund_legacy"] = liab["refund_db_legacy_est"].iloc[i]
-            f.loc[i, "ben_payment_new"] = liab["retire_ben_db_new_est"].iloc[i]
-            f.loc[i, "refund_new"] = liab["refund_db_new_est"].iloc[i]
+            _phase_benefits_refunds(f, liab, i, ctx)
             f.loc[i, "total_ben_payment"] = f.loc[i, "ben_payment_legacy"] + f.loc[i, "ben_payment_new"]
             f.loc[i, "total_refund"] = f.loc[i, "refund_legacy"] + f.loc[i, "refund_new"]
 
@@ -388,33 +935,10 @@ def _compute_funding_corridor(
                 "total_ben_payment", "total_refund",
             ])
 
-            f.loc[i, "nc_legacy"] = f.loc[i, "nc_rate_db_legacy"] * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "nc_new"] = f.loc[i, "nc_rate_db_new"] * f.loc[i, "payroll_db_new"]
-            pdb = f.loc[i, "payroll_db_legacy"] + f.loc[i, "payroll_db_new"]
-            f.loc[i, "total_nc_rate"] = (f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"]) / pdb if pdb > 0 else 0
+            _phase_normal_cost(f, i, ctx)
             _accumulate_to_aggregate(agg, f, i, ["nc_legacy", "nc_new"])
 
-            # Under baseline (experience = assumptions), gain/loss = 0
-            f.loc[i, "liability_gain_loss_legacy"] = liab["liability_gain_loss_legacy_est"].iloc[i] if "liability_gain_loss_legacy_est" in liab.columns else 0
-            f.loc[i, "liability_gain_loss_new"] = liab["liability_gain_loss_new_est"].iloc[i] if "liability_gain_loss_new_est" in liab.columns else 0
-
-            f.loc[i, "aal_legacy"] = _aal_rollforward(
-                aal_prev=f.loc[i - 1, "aal_legacy"],
-                nc=f.loc[i, "nc_legacy"],
-                ben=f.loc[i, "ben_payment_legacy"],
-                refund=f.loc[i, "refund_legacy"],
-                liab_gl=f.loc[i, "liability_gain_loss_legacy"],
-                dr=dr_current,
-            )
-            f.loc[i, "aal_new"] = _aal_rollforward(
-                aal_prev=f.loc[i - 1, "aal_new"],
-                nc=f.loc[i, "nc_new"],
-                ben=f.loc[i, "ben_payment_new"],
-                refund=f.loc[i, "refund_new"],
-                liab_gl=f.loc[i, "liability_gain_loss_new"],
-                dr=dr_new,
-            )
-            f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
+            _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
 
             _accumulate_to_aggregate(agg, f, i, [
                 "aal_legacy", "aal_new", "total_aal",
@@ -422,57 +946,11 @@ def _compute_funding_corridor(
 
             funding[cn] = f
 
-        agg_pdb = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
-        agg.loc[i, "total_nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / agg_pdb if agg_pdb > 0 else 0
+        _nc_rate_agg(agg, i, ctx)
 
         # --- DROP (only for plans with has_drop=true) ---
         if has_drop:
-            drop = funding["drop"]
-            reg = funding[drop_ref_class]
-            drop.loc[i, "total_payroll"] = drop.loc[i - 1, "total_payroll"] * (1 + payroll_growth)
-            drop.loc[i, "payroll_db_legacy"] = drop.loc[i, "total_payroll"] * (reg.loc[i, "payroll_db_legacy_ratio"] + reg.loc[i, "payroll_dc_legacy_ratio"])
-            drop.loc[i, "payroll_db_new"] = drop.loc[i, "total_payroll"] * (reg.loc[i, "payroll_db_new_ratio"] + reg.loc[i, "payroll_dc_new_ratio"])
-
-            if reg.loc[i - 1, "total_ben_payment"] > 0:
-                drop.loc[i, "total_ben_payment"] = drop.loc[i - 1, "total_ben_payment"] * reg.loc[i, "total_ben_payment"] / reg.loc[i - 1, "total_ben_payment"]
-            if reg.loc[i - 1, "total_refund"] > 0:
-                drop.loc[i, "total_refund"] = drop.loc[i - 1, "total_refund"] * reg.loc[i, "total_refund"] / reg.loc[i - 1, "total_refund"]
-
-            if reg.loc[i, "total_ben_payment"] > 0:
-                drop.loc[i, "ben_payment_legacy"] = drop.loc[i, "total_ben_payment"] * reg.loc[i, "ben_payment_legacy"] / reg.loc[i, "total_ben_payment"]
-                drop.loc[i, "ben_payment_new"] = drop.loc[i, "total_ben_payment"] * reg.loc[i, "ben_payment_new"] / reg.loc[i, "total_ben_payment"]
-            if reg.loc[i, "total_refund"] > 0:
-                drop.loc[i, "refund_legacy"] = drop.loc[i, "total_refund"] * reg.loc[i, "refund_legacy"] / reg.loc[i, "total_refund"]
-                drop.loc[i, "refund_new"] = drop.loc[i, "total_refund"] * reg.loc[i, "refund_new"] / reg.loc[i, "total_refund"]
-
-            drop.loc[i, "nc_rate_db_legacy"] = agg.loc[i, "nc_legacy"] / agg.loc[i, "payroll_db_legacy"] if agg.loc[i, "payroll_db_legacy"] > 0 else 0
-            drop.loc[i, "nc_rate_db_new"] = agg.loc[i, "nc_new"] / agg.loc[i, "payroll_db_new"] if agg.loc[i, "payroll_db_new"] > 0 else 0
-            drop.loc[i, "nc_legacy"] = drop.loc[i, "nc_rate_db_legacy"] * drop.loc[i, "payroll_db_legacy"]
-            drop.loc[i, "nc_new"] = drop.loc[i, "nc_rate_db_new"] * drop.loc[i, "payroll_db_new"]
-
-            drop.loc[i, "aal_legacy"] = (drop.loc[i - 1, "aal_legacy"] * (1 + dr_current)
-                + (drop.loc[i, "nc_legacy"] - drop.loc[i, "ben_payment_legacy"] - drop.loc[i, "refund_legacy"]) * (1 + dr_current) ** 0.5)
-            drop.loc[i, "aal_new"] = (drop.loc[i - 1, "aal_new"] * (1 + dr_new)
-                + (drop.loc[i, "nc_new"] - drop.loc[i, "ben_payment_new"] - drop.loc[i, "refund_new"]) * (1 + dr_new) ** 0.5)
-            drop.loc[i, "total_aal"] = drop.loc[i, "aal_legacy"] + drop.loc[i, "aal_new"]
-            funding["drop"] = drop
-
-            _accumulate_to_aggregate(agg, drop, i, [
-                "total_payroll", "payroll_db_legacy", "payroll_db_new",
-            ])
-            _accumulate_to_aggregate(agg, drop, i, [
-                "ben_payment_legacy", "refund_legacy",
-                "ben_payment_new", "refund_new",
-                "total_ben_payment", "total_refund",
-            ])
-            _accumulate_to_aggregate(agg, drop, i, ["nc_legacy", "nc_new"])
-            agg_pdb2 = agg.loc[i, "payroll_db_legacy"] + agg.loc[i, "payroll_db_new"]
-            agg.loc[i, "total_nc_rate"] = (agg.loc[i, "nc_legacy"] + agg.loc[i, "nc_new"]) / agg_pdb2 if agg_pdb2 > 0 else 0
-            agg.loc[i, "nc_rate_db_legacy"] = agg.loc[i, "nc_legacy"] / agg.loc[i, "payroll_db_legacy"] if agg.loc[i, "payroll_db_legacy"] > 0 else 0
-            agg.loc[i, "nc_rate_db_new"] = agg.loc[i, "nc_new"] / agg.loc[i, "payroll_db_new"] if agg.loc[i, "payroll_db_new"] > 0 else 0
-            _accumulate_to_aggregate(agg, drop, i, [
-                "aal_legacy", "aal_new", "total_aal",
-            ])
+            _phase_drop_projection(funding, agg, i, ctx)
 
         # --- Contributions, MVA, AVA ---
         for cn in all_classes:
@@ -489,23 +967,13 @@ def _compute_funding_corridor(
                 f.loc[i, "er_dc_rate_legacy"] = dc_rate
                 f.loc[i, "er_dc_rate_new"] = dc_rate
 
-            f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
-            f.loc[i, "ee_nc_cont_legacy"] = db_ee_cont_rate * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "ee_nc_cont_new"] = db_ee_cont_rate * f.loc[i, "payroll_db_new"]
+            _phase_contributions(f, i, ctx)
             _accumulate_to_aggregate(agg, f, i, [
                 "ee_nc_cont_legacy", "ee_nc_cont_new",
             ])
-
-            f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "admin_exp_legacy", "admin_exp_new",
             ])
-
-            f.loc[i, "er_nc_cont_legacy"] = f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"] + f.loc[i, "admin_exp_legacy"]
-            f.loc[i, "er_nc_cont_new"] = f.loc[i, "er_nc_rate_new"] * f.loc[i, "payroll_db_new"] + f.loc[i, "admin_exp_new"]
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * f.loc[i, "payroll_db_new"]
             f.loc[i, "total_er_db_cont"] = (f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
                                              + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"])
             _accumulate_to_aggregate(agg, f, i, [
@@ -514,9 +982,7 @@ def _compute_funding_corridor(
                 "total_er_db_cont",
             ])
 
-            f.loc[i, "er_dc_cont_legacy"] = f.loc[i, "er_dc_rate_legacy"] * f.loc[i, "payroll_dc_legacy"]
-            f.loc[i, "er_dc_cont_new"] = f.loc[i, "er_dc_rate_new"] * f.loc[i, "payroll_dc_new"]
-            f.loc[i, "total_er_dc_cont"] = f.loc[i, "er_dc_cont_legacy"] + f.loc[i, "er_dc_cont_new"]
+            _phase_dc_contributions(f, i)
             _accumulate_to_aggregate(agg, f, i, [
                 "er_dc_cont_legacy", "er_dc_cont_new", "total_er_dc_cont",
             ])
@@ -527,31 +993,10 @@ def _compute_funding_corridor(
             f.loc[i, "roa"] = roa
             agg.loc[i, "roa"] = roa
 
-            cf_leg = (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
-                      + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
-                      - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"])
-            cf_new = (f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
-                      + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
-                      - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
-
-            f.loc[i, "total_solv_cont"] = _solvency_cont(
-                mva_prev=f.loc[i - 1, "total_mva"],
-                cf_total=cf_leg + cf_new,
-                roa=roa,
-            )
-            if f.loc[i, "total_aal"] > 0:
-                f.loc[i, "solv_cont_legacy"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
-                f.loc[i, "solv_cont_new"] = f.loc[i, "total_solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
-
-            f.loc[i, "net_cf_legacy"] = cf_leg + f.loc[i, "solv_cont_legacy"]
-            f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+            _phase_cash_flow_and_solvency(f, i, roa)
             _accumulate_to_aggregate(agg, f, i, ["net_cf_legacy", "net_cf_new"])
 
-            f.loc[i, "mva_legacy"] = _mva_rollforward(
-                f.loc[i - 1, "mva_legacy"], f.loc[i, "net_cf_legacy"], roa)
-            f.loc[i, "mva_new"] = _mva_rollforward(
-                f.loc[i - 1, "mva_new"], f.loc[i, "net_cf_new"], roa)
-            f.loc[i, "total_mva"] = f.loc[i, "mva_legacy"] + f.loc[i, "mva_new"]
+            _phase_mva(f, i, roa)
             _accumulate_to_aggregate(agg, f, i, [
                 "mva_legacy", "mva_new", "total_mva",
             ])
@@ -562,92 +1007,28 @@ def _compute_funding_corridor(
             funding[cn] = f
 
         # --- AVA smoothing at plan aggregate level ---
-        ava_leg = ava_strategy.smooth(
-            ava_prev=agg.loc[i - 1, "ava_legacy"],
-            net_cf=agg.loc[i, "net_cf_legacy"],
-            mva=agg.loc[i, "mva_legacy"],
-            dr=dr_current,
-            state={},
-        )
-        agg.loc[i, "exp_inv_earnings_ava_legacy"] = ava_leg["exp_inv_earnings_ava"]
-        agg.loc[i, "exp_ava_legacy"] = ava_leg["exp_ava"]
-        agg.loc[i, "ava_legacy"] = ava_leg["ava"]
-        agg.loc[i, "alloc_inv_earnings_ava_legacy"] = ava_leg["alloc_inv_earnings_ava"]
-        agg.loc[i, "ava_base_legacy"] = ava_leg["ava_base"]
-
-        ava_new = ava_strategy.smooth(
-            ava_prev=agg.loc[i - 1, "ava_new"],
-            net_cf=agg.loc[i, "net_cf_new"],
-            mva=agg.loc[i, "mva_new"],
-            dr=dr_new,
-            state={},
-        )
-        agg.loc[i, "exp_inv_earnings_ava_new"] = ava_new["exp_inv_earnings_ava"]
-        agg.loc[i, "exp_ava_new"] = ava_new["exp_ava"]
-        agg.loc[i, "ava_new"] = ava_new["ava"]
-        agg.loc[i, "alloc_inv_earnings_ava_new"] = ava_new["alloc_inv_earnings_ava"]
-        agg.loc[i, "ava_base_new"] = ava_new["ava_base"]
+        _phase_ava_corridor_smoothing(agg, i, ava_strategy, dr_current, dr_new)
 
         # --- Allocate AVA earnings to classes (no-op for class-level smoothing) ---
         ava_strategy.allocate_to_classes(agg, funding, all_classes, i)
 
-        # --- DROP reallocation (only for plans with has_drop=true) ---
-        if has_drop:
-            drop = funding["drop"]
-            if agg.loc[i, "aal_legacy"] != 0:
-                drop.loc[i, "net_reallocation_legacy"] = drop.loc[i, "unadj_ava_legacy"] - drop.loc[i, "aal_legacy"] * agg.loc[i, "ava_legacy"] / agg.loc[i, "aal_legacy"]
-            drop.loc[i, "ava_legacy"] = drop.loc[i, "unadj_ava_legacy"] - drop.loc[i, "net_reallocation_legacy"]
-            if agg.loc[i, "aal_new"] != 0:
-                drop.loc[i, "net_reallocation_new"] = drop.loc[i, "unadj_ava_new"] - drop.loc[i, "aal_new"] * agg.loc[i, "ava_new"] / agg.loc[i, "aal_new"]
-            drop.loc[i, "ava_new"] = drop.loc[i, "unadj_ava_new"] - drop.loc[i, "net_reallocation_new"]
-            funding["drop"] = drop
-
-            for cn in class_names:
-                f = funding[cn]
-                agg_ex_drop_leg = agg.loc[i, "aal_legacy"] - drop.loc[i, "aal_legacy"]
-                prop_leg = f.loc[i, "aal_legacy"] / agg_ex_drop_leg if agg_ex_drop_leg != 0 else 0
-                f.loc[i, "net_reallocation_legacy"] = prop_leg * drop.loc[i, "net_reallocation_legacy"]
-                f.loc[i, "ava_legacy"] = f.loc[i, "unadj_ava_legacy"] + f.loc[i, "net_reallocation_legacy"]
-
-                agg_ex_drop_new = agg.loc[i, "aal_new"] - drop.loc[i, "aal_new"]
-                prop_new = f.loc[i, "aal_new"] / agg_ex_drop_new if agg_ex_drop_new != 0 else 0
-                f.loc[i, "net_reallocation_new"] = prop_new * drop.loc[i, "net_reallocation_new"]
-                f.loc[i, "ava_new"] = f.loc[i, "unadj_ava_new"] + f.loc[i, "net_reallocation_new"]
-                funding[cn] = f
-        else:
-            # No DROP: unadjusted AVA is final AVA
-            for cn in class_names:
-                f = funding[cn]
-                f.loc[i, "ava_legacy"] = f.loc[i, "unadj_ava_legacy"]
-                f.loc[i, "ava_new"] = f.loc[i, "unadj_ava_new"]
-                funding[cn] = f
+        # --- Finalize AVA (DROP reallocation when applicable) ---
+        _finalize_ava_with_drop(funding, agg, i, ctx)
 
         # --- UAL, funded ratios ---
         for cn in all_classes:
             f = funding[cn]
-            f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
+            _phase_ual_and_funded_ratios(f, i)
             _accumulate_to_aggregate(agg, f, i, ["total_ava"])
-
-            f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
-            f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
-            f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "ual_ava_legacy", "ual_ava_new", "total_ual_ava",
             ])
-
-            f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
-            f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
-            f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "ual_mva_legacy", "ual_mva_new", "total_ual_mva",
             ])
 
-            f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-            f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-
-            f.loc[i, "total_er_cont"] = f.loc[i, "total_er_db_cont"] + f.loc[i, "total_er_dc_cont"] + f.loc[i, "total_solv_cont"]
+            _phase_er_cont_totals(f, i, ctx)
             _accumulate_to_aggregate(agg, f, i, ["total_er_cont"])
-            f.loc[i, "total_er_cont_rate"] = f.loc[i, "total_er_cont"] / f.loc[i, "total_payroll"] if f.loc[i, "total_payroll"] > 0 else 0
             funding[cn] = f
 
         agg.loc[i, "fr_mva"] = agg.loc[i, "total_mva"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
@@ -719,12 +1100,7 @@ def _compute_funding_gainloss(
     # --- Load initial row ---
     init = ctx.init_funding.iloc[0]
 
-    # Return-scenario override: gainloss overrides unconditionally
-    # (bit-identity risk #7). Corridor gates year>=start_year+2. Will
-    # move to a dedicated helper in Step 2.F.
-    ret_scen = ctx.ret_scen
-    ret_scen["model"] = ctx.model_return
-    ret_scen["assumption"] = dr_current
+    ret_scen = _prepare_return_scenarios(ctx, dr_current)
 
     # --- Legacy funding config parameters (not yet on ctx) ---
     raw = constants.raw if hasattr(constants, "raw") else {}
@@ -843,59 +1219,18 @@ def _compute_funding_gainloss(
         year = start_year + i
 
         # Payroll projection
-        f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + payroll_growth)
-        f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
-        f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
-        f.loc[i, "payroll_cb_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_cb_new_ratio"]
+        _phase_payroll(f, i, ctx)
 
         # Benefit payments from liability pipeline
-        f.loc[i, "ben_payment_legacy"] = (
-            liab["retire_ben_db_legacy_est"].iloc[i]
-            + liab["retire_ben_current_est"].iloc[i]
-            + liab["retire_ben_term_est"].iloc[i])
-        f.loc[i, "refund_legacy"] = liab["refund_db_legacy_est"].iloc[i]
-        f.loc[i, "ben_payment_new"] = (
-            liab.get("retire_ben_db_new_est", pd.Series(np.zeros(n_years))).iloc[i]
-            + liab.get("retire_ben_cb_new_est", pd.Series(np.zeros(n_years))).iloc[i])
-        f.loc[i, "refund_new"] = (
-            liab.get("refund_db_new_est", pd.Series(np.zeros(n_years))).iloc[i]
-            + liab.get("refund_cb_new_est", pd.Series(np.zeros(n_years))).iloc[i])
+        _phase_benefits_refunds(f, liab, i, ctx)
 
-        # Normal cost
-        f.loc[i, "nc_legacy"] = f.loc[i, "nc_rate_db_legacy"] * f.loc[i, "payroll_db_legacy"]
-        payroll_new_total = f.loc[i, "payroll_db_new"] + f.loc[i, "payroll_cb_new"]
-        f.loc[i, "nc_new"] = (f.loc[i, "nc_rate_db_new"] * f.loc[i, "payroll_db_new"]
-                               + f.loc[i, "nc_rate_cb_new"] * f.loc[i, "payroll_cb_new"])
-        f.loc[i, "nc_rate"] = ((f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"])
-                                / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
+        # Normal cost (rate written by helper using canonical denominator — GH #42)
+        _phase_normal_cost(f, i, ctx)
 
-        # Liability gain/loss
-        f.loc[i, "liability_gain_loss_legacy"] = (
-            liab["liability_gain_loss_legacy_est"].iloc[i]
-            if "liability_gain_loss_legacy_est" in liab.columns else 0)
-        f.loc[i, "liability_gain_loss_new"] = (
-            liab["liability_gain_loss_new_est"].iloc[i]
-            if "liability_gain_loss_new_est" in liab.columns else 0)
+        # Liability gain/loss + AAL roll-forward
+        _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
+        # Gainloss-only sum column (not in corridor schema)
         f.loc[i, "liability_gain_loss"] = f.loc[i, "liability_gain_loss_legacy"] + f.loc[i, "liability_gain_loss_new"]
-
-        # AAL roll-forward
-        f.loc[i, "aal_legacy"] = _aal_rollforward(
-            aal_prev=f.loc[i - 1, "aal_legacy"],
-            nc=f.loc[i, "nc_legacy"],
-            ben=f.loc[i, "ben_payment_legacy"],
-            refund=f.loc[i, "refund_legacy"],
-            liab_gl=f.loc[i, "liability_gain_loss_legacy"],
-            dr=dr_current,
-        )
-        f.loc[i, "aal_new"] = _aal_rollforward(
-            aal_prev=f.loc[i - 1, "aal_new"],
-            nc=f.loc[i, "nc_new"],
-            ben=f.loc[i, "ben_payment_new"],
-            refund=f.loc[i, "refund_new"],
-            liab_gl=f.loc[i, "liability_gain_loss_new"],
-            dr=dr_new,
-        )
-        f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
 
         # NC, EE, ER NC, statutory cascade, and amort rates
         cont_strategy.compute_rates(
@@ -903,29 +1238,8 @@ def _compute_funding_gainloss(
             amo_state={"cur_pay": pay_current, "fut_pay": pay_new},
         )
 
-        # Admin expense rate
-        f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
-
-        # Employee contribution amounts
-        f.loc[i, "ee_nc_cont_legacy"] = f.loc[i, "ee_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-        f.loc[i, "ee_nc_cont_new"] = f.loc[i, "ee_nc_rate_new"] * payroll_new_total
-
-        # Admin expenses
-        f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
-        f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * payroll_new_total
-
-        # Employer contribution amounts
-        f.loc[i, "er_nc_cont_legacy"] = (f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-                                          + f.loc[i, "admin_exp_legacy"])
-        f.loc[i, "er_nc_cont_new"] = (f.loc[i, "er_nc_rate_new"] * payroll_new_total
-                                       + f.loc[i, "admin_exp_new"])
-
-        # Employer amortization amounts
-        if funding_policy == "statutory":
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-        else:
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "total_payroll"]
-        f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * payroll_new_total
+        # Contribution dollars (admin rate + EE/admin/ER NC/ER amo per leg)
+        _phase_contributions(f, i, ctx)
 
         # Return on assets
         roa_row = ret_scen[ret_scen["year"] == year]
@@ -933,98 +1247,20 @@ def _compute_funding_gainloss(
         f.loc[i, "roa"] = roa
 
         # Cash flows and solvency contribution
-        cf_legacy = (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
-                     + f.loc[i, "er_amo_cont_legacy"] - f.loc[i, "ben_payment_legacy"]
-                     - f.loc[i, "refund_legacy"] - f.loc[i, "admin_exp_legacy"])
-        cf_new = (f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
-                  + f.loc[i, "er_amo_cont_new"] - f.loc[i, "ben_payment_new"]
-                  - f.loc[i, "refund_new"] - f.loc[i, "admin_exp_new"])
-        cf_total = cf_legacy + cf_new
-
-        f.loc[i, "solv_cont"] = _solvency_cont(
-            mva_prev=f.loc[i - 1, "total_mva"],
-            cf_total=cf_total,
-            roa=roa,
-        )
-        if f.loc[i, "total_aal"] > 0:
-            f.loc[i, "solv_cont_legacy"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_legacy"] / f.loc[i, "total_aal"]
-            f.loc[i, "solv_cont_new"] = f.loc[i, "solv_cont"] * f.loc[i, "aal_new"] / f.loc[i, "total_aal"]
-
-        f.loc[i, "net_cf_legacy"] = cf_legacy + f.loc[i, "solv_cont_legacy"]
-        f.loc[i, "net_cf_new"] = cf_new + f.loc[i, "solv_cont_new"]
+        _phase_cash_flow_and_solvency(f, i, roa)
 
         # MVA projection
-        f.loc[i, "mva_legacy"] = _mva_rollforward(
-            f.loc[i - 1, "mva_legacy"], f.loc[i, "net_cf_legacy"], roa)
-        f.loc[i, "mva_new"] = _mva_rollforward(
-            f.loc[i - 1, "mva_new"], f.loc[i, "net_cf_new"], roa)
-        f.loc[i, "total_mva"] = f.loc[i, "mva_legacy"] + f.loc[i, "mva_new"]
+        _phase_mva(f, i, roa)
 
-        # AVA gain/loss deferral smoothing — legacy
-        ava_leg = ava_strategy.smooth(
-            ava_prev=f.loc[i - 1, "ava_legacy"],
-            net_cf=f.loc[i, "net_cf_legacy"],
-            mva=f.loc[i, "mva_legacy"],
-            dr=dr_current,
-            state={
-                "defer_y1_prev": f.loc[i - 1, "defer_y1_legacy"],
-                "defer_y2_prev": f.loc[i - 1, "defer_y2_legacy"],
-                "defer_y3_prev": f.loc[i - 1, "defer_y3_legacy"],
-                "defer_y4_prev": f.loc[i - 1, "defer_y4_legacy"],
-            },
-        )
-        for k, v in ava_leg.items():
-            if k == "exp_inv_income":
-                f.loc[i, "exp_inv_income_legacy"] = v
-            elif k == "exp_ava":
-                f.loc[i, "exp_ava_legacy"] = v
-            elif k == "ava":
-                f.loc[i, "ava_legacy"] = v
-            else:
-                f.loc[i, f"{k}_legacy"] = v
+        # AVA gain/loss deferral smoothing (both legs)
+        _phase_ava_gainloss_smoothing(f, i, ava_strategy, dr_current, dr_new)
 
-        # AVA gain/loss deferral smoothing — new
-        ava_new = ava_strategy.smooth(
-            ava_prev=f.loc[i - 1, "ava_new"],
-            net_cf=f.loc[i, "net_cf_new"],
-            mva=f.loc[i, "mva_new"],
-            dr=dr_new,
-            state={
-                "defer_y1_prev": f.loc[i - 1, "defer_y1_new"],
-                "defer_y2_prev": f.loc[i - 1, "defer_y2_new"],
-                "defer_y3_prev": f.loc[i - 1, "defer_y3_new"],
-                "defer_y4_prev": f.loc[i - 1, "defer_y4_new"],
-            },
-        )
-        for k, v in ava_new.items():
-            if k == "exp_inv_income":
-                f.loc[i, "exp_inv_income_new"] = v
-            elif k == "exp_ava":
-                f.loc[i, "exp_ava_new"] = v
-            elif k == "ava":
-                f.loc[i, "ava_new"] = v
-            else:
-                f.loc[i, f"{k}_new"] = v
+        # Total AVA, UAL, funded ratios
+        _phase_ual_and_funded_ratios(f, i)
 
-        f.loc[i, "total_ava"] = f.loc[i, "ava_legacy"] + f.loc[i, "ava_new"]
-
-        # UAL and funded ratios
-        f.loc[i, "ual_ava_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "ava_legacy"]
-        f.loc[i, "ual_ava_new"] = f.loc[i, "aal_new"] - f.loc[i, "ava_new"]
-        f.loc[i, "total_ual_ava"] = f.loc[i, "ual_ava_legacy"] + f.loc[i, "ual_ava_new"]
-
-        f.loc[i, "ual_mva_legacy"] = f.loc[i, "aal_legacy"] - f.loc[i, "mva_legacy"]
-        f.loc[i, "ual_mva_new"] = f.loc[i, "aal_new"] - f.loc[i, "mva_new"]
-        f.loc[i, "total_ual_mva"] = f.loc[i, "ual_mva_legacy"] + f.loc[i, "ual_mva_new"]
-
-        f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-        f.loc[i, "fr_mva"] = f.loc[i, "total_mva"] / f.loc[i, "total_aal"] if f.loc[i, "total_aal"] != 0 else 0
-
-        # Contribution totals
-        f.loc[i, "total_er_cont"] = (f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
-                                      + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"]
-                                      + f.loc[i, "solv_cont"])
-        f.loc[i, "total_er_cont_rate"] = f.loc[i, "total_er_cont"] / f.loc[i, "total_payroll"] if f.loc[i, "total_payroll"] > 0 else 0
+        # Contribution totals (total_er_cont, total_er_cont_rate)
+        _phase_er_cont_totals(f, i, ctx)
+        # Gainloss-path-only total contribution rate
         f.loc[i, "tot_cont_rate"] = (
             (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
              + f.loc[i, "er_amo_cont_legacy"]
@@ -1032,14 +1268,8 @@ def _compute_funding_gainloss(
              + f.loc[i, "er_amo_cont_new"] + f.loc[i, "solv_cont"])
             / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
 
-        # Real cost metrics
-        f.loc[i, "total_er_cont_real"] = f.loc[i, "total_er_cont"] / (1 + inflation) ** (year - start_year)
-        if i == 1:
-            f.loc[i, "cum_er_cont_real"] = f.loc[i, "total_er_cont_real"]
-        else:
-            f.loc[i, "cum_er_cont_real"] = f.loc[i - 1, "cum_er_cont_real"] + f.loc[i, "total_er_cont_real"]
-        f.loc[i, "total_ual_mva_real"] = f.loc[i, "total_ual_mva"] / (1 + inflation) ** (year - start_year)
-        f.loc[i, "all_in_cost_real"] = f.loc[i, "cum_er_cont_real"] + f.loc[i, "total_ual_mva_real"]
+        # Real cost metrics (gainloss-path-only; capability-gated once unified)
+        _phase_real_cost_metrics(f, i, year, start_year, inflation)
 
         # Amortization layer updates — current hires (legacy)
         _roll_amort_layer(

@@ -254,7 +254,7 @@ def test_er_contribution_composition(class_name, model_results):
         expected = (
             f.loc[i, "total_er_db_cont"]
             + f.loc[i, "total_er_dc_cont"]
-            + f.loc[i, "total_solv_cont"]
+            + f.loc[i, "solv_cont"]
         )
         np.testing.assert_allclose(
             f.loc[i, "total_er_cont"], expected, atol=1e-2,
