@@ -95,9 +95,10 @@ class FundingContext:
     drop_ref_class: Optional[str]
     all_classes: list  # class_names + ["drop"] if has_drop
 
-    # Plan capabilities — derived from config; each field earns its
-    # place via at least one phase-helper consumer.
+    # Plan capabilities — derived from config or schema; each field
+    # earns its place via at least one phase-helper consumer.
     has_cb: bool  # cash-balance leg present (benefit_types contains "cb")
+    has_dc: bool  # DC leg flows through the funding frame (schema-driven)
 
     # Raw config sub-maps (for legacy paths that still read funding_raw)
     funding_policy: str
@@ -153,6 +154,11 @@ def _resolve_funding_context(
 
     # Plan capabilities
     has_cb = "cb" in constants.benefit_types
+    # has_dc is schema-driven: TRS has "dc" in benefit_types but its ORP
+    # is outside the trust and its funding frame has no DC columns, so
+    # benefit_types is the wrong source. The init_funding schema is
+    # authoritative for what columns the funding model expects to read/write.
+    has_dc = "payroll_dc_legacy" in funding_inputs["init_funding"].columns
 
     # Strategy selection
     method = (fund.ava_smoothing or {}).get("method")
@@ -203,6 +209,7 @@ def _resolve_funding_context(
         drop_ref_class=drop_ref_class,
         all_classes=all_classes,
         has_cb=has_cb,
+        has_dc=has_dc,
         funding_policy=fund.funding_policy,
         return_scen_col=raw.get("economic", {}).get("return_scen", "assumption"),
         init_funding=funding_inputs["init_funding"],
@@ -257,6 +264,27 @@ def _phase_payroll(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
     f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
     if ctx.has_cb:
         f.loc[i, "payroll_cb_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_cb_new_ratio"]
+    if ctx.has_dc:
+        f.loc[i, "payroll_dc_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_legacy_ratio"]
+        f.loc[i, "payroll_dc_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_new_ratio"]
+
+
+def _phase_dc_contributions(f: pd.DataFrame, i: int) -> None:
+    """Compute DC employer contribution dollars for one class's row.
+
+    Writes ``er_dc_cont_legacy``, ``er_dc_cont_new``, and the total
+    ``total_er_dc_cont``. Assumes the per-leg DC rates
+    (``er_dc_rate_legacy/new``) and DC payrolls have already been
+    written onto the row — DC rates are set at the call site because
+    they depend on plan config (the class's ``er_dc_cont_rate``) and
+    on DROP-cohort special-casing.
+
+    Used only when the plan has a DC leg flowing through the funding
+    frame (``ctx.has_dc``).
+    """
+    f.loc[i, "er_dc_cont_legacy"] = f.loc[i, "er_dc_rate_legacy"] * f.loc[i, "payroll_dc_legacy"]
+    f.loc[i, "er_dc_cont_new"] = f.loc[i, "er_dc_rate_new"] * f.loc[i, "payroll_dc_new"]
+    f.loc[i, "total_er_dc_cont"] = f.loc[i, "er_dc_cont_legacy"] + f.loc[i, "er_dc_cont_new"]
 
 
 def _phase_benefits_refunds(
@@ -868,8 +896,6 @@ def _compute_funding_corridor(
             liab = liability_results[cn]
 
             _phase_payroll(f, i, ctx)
-            f.loc[i, "payroll_dc_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_legacy_ratio"]
-            f.loc[i, "payroll_dc_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_new_ratio"]
 
             _accumulate_to_aggregate(agg, f, i, [
                 "total_payroll", "payroll_db_legacy", "payroll_db_new",
@@ -933,9 +959,7 @@ def _compute_funding_corridor(
                 "total_er_db_cont",
             ])
 
-            f.loc[i, "er_dc_cont_legacy"] = f.loc[i, "er_dc_rate_legacy"] * f.loc[i, "payroll_dc_legacy"]
-            f.loc[i, "er_dc_cont_new"] = f.loc[i, "er_dc_rate_new"] * f.loc[i, "payroll_dc_new"]
-            f.loc[i, "total_er_dc_cont"] = f.loc[i, "er_dc_cont_legacy"] + f.loc[i, "er_dc_cont_new"]
+            _phase_dc_contributions(f, i)
             _accumulate_to_aggregate(agg, f, i, [
                 "er_dc_cont_legacy", "er_dc_cont_new", "total_er_dc_cont",
             ])
