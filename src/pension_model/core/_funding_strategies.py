@@ -141,6 +141,10 @@ class CorridorSmoothing:
     """
 
     aggregation_level: ClassVar[Literal["plan", "class"]] = "plan"
+    # Corridor keeps the first two rows of return_scenarios at their CSV values
+    # (actual realized returns for the most recent historical years) and only
+    # overrides years >= start_year + 2 with projection defaults.
+    ret_scen_gates_projection: ClassVar[bool] = True
 
     def smooth(
         self,
@@ -215,6 +219,10 @@ class GainLossSmoothing:
     """
 
     aggregation_level: ClassVar[Literal["plan", "class"]] = "class"
+    # Gainloss overrides every row of return_scenarios unconditionally,
+    # including historical rows. Bit-identity risk: do not change without
+    # regenerating baselines.
+    ret_scen_gates_projection: ClassVar[bool] = False
 
     def smooth(
         self,

@@ -290,6 +290,29 @@ def _phase_benefits_refunds(
     f.loc[i, "refund_new"] = refund_new
 
 
+def _prepare_return_scenarios(ctx: FundingContext, dr_current: float) -> pd.DataFrame:
+    """Apply projection overrides to the return-scenarios frame.
+
+    ``ret_scen["model"]`` and ``ret_scen["assumption"]`` get written
+    with ``ctx.model_return`` and ``dr_current`` respectively. The AVA
+    strategy decides whether the override applies to all rows or only
+    to projected rows (year >= start_year + 2) — corridor preserves
+    the first two rows' CSV values; gainloss overrides unconditionally.
+
+    Mutates a copy of ``ctx.ret_scen`` and returns it; ctx is unchanged.
+    """
+    rs = ctx.ret_scen
+    if ctx.ava_strategy.ret_scen_gates_projection:
+        first_proj_year = ctx.start_year + 2
+        mask = rs["year"] >= first_proj_year
+        rs.loc[mask, "model"] = ctx.model_return
+        rs.loc[mask, "assumption"] = dr_current
+    else:
+        rs["model"] = ctx.model_return
+        rs["assumption"] = dr_current
+    return rs
+
+
 def _nc_rate_agg(agg: pd.DataFrame, i: int, ctx: FundingContext) -> None:
     """Write ``nc_rate`` on the aggregate frame using the canonical
     denominator (DB legacy + DB new + CB new when applicable).
@@ -758,16 +781,7 @@ def _compute_funding_corridor(
     init_funding = ctx.init_funding
     amort_layers = ctx.amort_layers
 
-    # Return scenario setup — select which column of return_scenarios to use.
-    # Corridor path: years 0 and 1 keep their CSV values (actual realized
-    # return); years >= start_year + 2 get overridden with model_return /
-    # dr_current for the projected path. Gainloss path overrides
-    # unconditionally — that asymmetry is load-bearing (bit-identity
-    # risk #7) and is handled by Step 2.F (not yet wired).
-    ret_scen = ctx.ret_scen
-    first_proj_year = ctx.start_year + 2
-    ret_scen.loc[ret_scen["year"] >= first_proj_year, "model"] = ctx.model_return
-    ret_scen.loc[ret_scen["year"] >= first_proj_year, "assumption"] = dr_current
+    ret_scen = _prepare_return_scenarios(ctx, dr_current)
 
     # Initialize funding tables
     funding = {}
@@ -1041,12 +1055,7 @@ def _compute_funding_gainloss(
     # --- Load initial row ---
     init = ctx.init_funding.iloc[0]
 
-    # Return-scenario override: gainloss overrides unconditionally
-    # (bit-identity risk #7). Corridor gates year>=start_year+2. Will
-    # move to a dedicated helper in Step 2.F.
-    ret_scen = ctx.ret_scen
-    ret_scen["model"] = ctx.model_return
-    ret_scen["assumption"] = dr_current
+    ret_scen = _prepare_return_scenarios(ctx, dr_current)
 
     # --- Legacy funding config parameters (not yet on ctx) ---
     raw = constants.raw if hasattr(constants, "raw") else {}
