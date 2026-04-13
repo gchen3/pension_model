@@ -311,6 +311,41 @@ def _phase_normal_cost(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
     f.loc[i, "nc_new"] = nc_new
 
 
+def _phase_liability_gl_and_aal(
+    f: pd.DataFrame, liab: pd.DataFrame, i: int, dr_current: float, dr_new: float
+) -> None:
+    """Copy liability gain/loss and roll the AAL forward for both legs.
+
+    Reads ``liability_gain_loss_legacy_est`` / ``liability_gain_loss_new_est``
+    from the liability pipeline output (always populated — see
+    pipeline.py), runs ``_aal_rollforward`` for each leg, and writes
+    ``aal_legacy``, ``aal_new``, ``total_aal``.
+
+    The gainloss-path ``liability_gain_loss = legacy + new`` sum column
+    is corridor-schema-absent and stays inline in that caller.
+    """
+    f.loc[i, "liability_gain_loss_legacy"] = liab["liability_gain_loss_legacy_est"].iloc[i]
+    f.loc[i, "liability_gain_loss_new"] = liab["liability_gain_loss_new_est"].iloc[i]
+
+    f.loc[i, "aal_legacy"] = _aal_rollforward(
+        aal_prev=f.loc[i - 1, "aal_legacy"],
+        nc=f.loc[i, "nc_legacy"],
+        ben=f.loc[i, "ben_payment_legacy"],
+        refund=f.loc[i, "refund_legacy"],
+        liab_gl=f.loc[i, "liability_gain_loss_legacy"],
+        dr=dr_current,
+    )
+    f.loc[i, "aal_new"] = _aal_rollforward(
+        aal_prev=f.loc[i - 1, "aal_new"],
+        nc=f.loc[i, "nc_new"],
+        ben=f.loc[i, "ben_payment_new"],
+        refund=f.loc[i, "refund_new"],
+        liab_gl=f.loc[i, "liability_gain_loss_new"],
+        dr=dr_new,
+    )
+    f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
+
+
 def _compute_funding_corridor(
     liability_results: dict,
     funding_inputs: dict,
@@ -474,27 +509,7 @@ def _compute_funding_corridor(
             f.loc[i, "total_nc_rate"] = (f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"]) / pdb if pdb > 0 else 0
             _accumulate_to_aggregate(agg, f, i, ["nc_legacy", "nc_new"])
 
-            # Under baseline (experience = assumptions), gain/loss = 0
-            f.loc[i, "liability_gain_loss_legacy"] = liab["liability_gain_loss_legacy_est"].iloc[i] if "liability_gain_loss_legacy_est" in liab.columns else 0
-            f.loc[i, "liability_gain_loss_new"] = liab["liability_gain_loss_new_est"].iloc[i] if "liability_gain_loss_new_est" in liab.columns else 0
-
-            f.loc[i, "aal_legacy"] = _aal_rollforward(
-                aal_prev=f.loc[i - 1, "aal_legacy"],
-                nc=f.loc[i, "nc_legacy"],
-                ben=f.loc[i, "ben_payment_legacy"],
-                refund=f.loc[i, "refund_legacy"],
-                liab_gl=f.loc[i, "liability_gain_loss_legacy"],
-                dr=dr_current,
-            )
-            f.loc[i, "aal_new"] = _aal_rollforward(
-                aal_prev=f.loc[i - 1, "aal_new"],
-                nc=f.loc[i, "nc_new"],
-                ben=f.loc[i, "ben_payment_new"],
-                refund=f.loc[i, "refund_new"],
-                liab_gl=f.loc[i, "liability_gain_loss_new"],
-                dr=dr_new,
-            )
-            f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
+            _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
 
             _accumulate_to_aggregate(agg, f, i, [
                 "aal_legacy", "aal_new", "total_aal",
@@ -935,33 +950,10 @@ def _compute_funding_gainloss(
         f.loc[i, "nc_rate"] = ((f.loc[i, "nc_legacy"] + f.loc[i, "nc_new"])
                                 / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
 
-        # Liability gain/loss
-        f.loc[i, "liability_gain_loss_legacy"] = (
-            liab["liability_gain_loss_legacy_est"].iloc[i]
-            if "liability_gain_loss_legacy_est" in liab.columns else 0)
-        f.loc[i, "liability_gain_loss_new"] = (
-            liab["liability_gain_loss_new_est"].iloc[i]
-            if "liability_gain_loss_new_est" in liab.columns else 0)
+        # Liability gain/loss + AAL roll-forward
+        _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
+        # Gainloss-only sum column (not in corridor schema)
         f.loc[i, "liability_gain_loss"] = f.loc[i, "liability_gain_loss_legacy"] + f.loc[i, "liability_gain_loss_new"]
-
-        # AAL roll-forward
-        f.loc[i, "aal_legacy"] = _aal_rollforward(
-            aal_prev=f.loc[i - 1, "aal_legacy"],
-            nc=f.loc[i, "nc_legacy"],
-            ben=f.loc[i, "ben_payment_legacy"],
-            refund=f.loc[i, "refund_legacy"],
-            liab_gl=f.loc[i, "liability_gain_loss_legacy"],
-            dr=dr_current,
-        )
-        f.loc[i, "aal_new"] = _aal_rollforward(
-            aal_prev=f.loc[i - 1, "aal_new"],
-            nc=f.loc[i, "nc_new"],
-            ben=f.loc[i, "ben_payment_new"],
-            refund=f.loc[i, "refund_new"],
-            liab_gl=f.loc[i, "liability_gain_loss_new"],
-            dr=dr_new,
-        )
-        f.loc[i, "total_aal"] = f.loc[i, "aal_legacy"] + f.loc[i, "aal_new"]
 
         # NC, EE, ER NC, statutory cascade, and amort rates
         cont_strategy.compute_rates(
