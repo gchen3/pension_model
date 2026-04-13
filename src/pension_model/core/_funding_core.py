@@ -1172,14 +1172,13 @@ def _compute_funding_corridor(
 
             funding[cn] = f
 
-        # --- AVA smoothing at plan aggregate level ---
-        _phase_ava_corridor_smoothing(agg, i, ava_strategy, dr_current, dr_new)
-
-        # --- Allocate AVA earnings to classes (no-op for class-level smoothing) ---
-        ava_strategy.allocate_to_classes(agg, funding, all_classes, i)
-
-        # --- Finalize AVA (DROP reallocation when applicable) ---
-        _finalize_ava_with_drop(funding, agg, i, ctx)
+        # --- Plan-level AVA smoothing + allocation + finalization ---
+        # Skipped for class-level (gainloss) strategies — those did
+        # their smoothing inside the phase-2 loop.
+        if ctx.ava_strategy.aggregation_level == "plan":
+            _phase_ava_corridor_smoothing(agg, i, ava_strategy, dr_current, dr_new)
+            ava_strategy.allocate_to_classes(agg, funding, ctx.all_classes, i)
+            _finalize_ava_with_drop(funding, agg, i, ctx)
 
         # --- UAL, funded ratios ---
         for cn in all_classes:
@@ -1443,6 +1442,14 @@ def _compute_funding_gainloss(
                 _phase_ava_gainloss_smoothing(f, i, ava_strategy, dr_current, dr_new)
 
             funding[cn] = f
+
+        # --- Plan-level AVA smoothing + allocation + finalization ---
+        # Skipped for class-level (gainloss) strategies — those did
+        # their smoothing inside the phase-2 loop.
+        if ctx.ava_strategy.aggregation_level == "plan":
+            _phase_ava_corridor_smoothing(agg, i, ava_strategy, dr_current, dr_new)
+            ava_strategy.allocate_to_classes(agg, funding, ctx.all_classes, i)
+            _finalize_ava_with_drop(funding, agg, i, ctx)
 
         # Total AVA, UAL, funded ratios
         _phase_ual_and_funded_ratios(f, i)
