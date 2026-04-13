@@ -1134,8 +1134,11 @@ def _compute_funding(
             _phase_payroll(f, i, ctx)
             _maybe_accumulate(ctx, agg, f, i, [
                 "total_payroll", "payroll_db_legacy", "payroll_db_new",
-                "payroll_dc_legacy", "payroll_dc_new",
             ])
+            if ctx.has_dc:
+                _maybe_accumulate(ctx, agg, f, i, [
+                    "payroll_dc_legacy", "payroll_dc_new",
+                ])
 
             _phase_benefits_refunds(f, liab, i, ctx)
             if "total_ben_payment" in f.columns:
@@ -1145,8 +1148,9 @@ def _compute_funding(
             _maybe_accumulate(ctx, agg, f, i, [
                 "ben_payment_legacy", "refund_legacy",
                 "ben_payment_new", "refund_new",
-                "total_ben_payment", "total_refund",
             ])
+            if "total_ben_payment" in f.columns:
+                _maybe_accumulate(ctx, agg, f, i, ["total_ben_payment", "total_refund"])
 
             _phase_normal_cost(f, i, ctx)
             _maybe_accumulate(ctx, agg, f, i, ["nc_legacy", "nc_new"])
@@ -1188,15 +1192,17 @@ def _compute_funding(
             _maybe_accumulate(ctx, agg, f, i, ["admin_exp_legacy", "admin_exp_new"])
 
             if ctx.is_multi_class:
-                f.loc[i, "total_er_db_cont"] = (
-                    f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
-                    + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"]
-                )
+                if "total_er_db_cont" in ctx.init_funding.columns:
+                    f.loc[i, "total_er_db_cont"] = (
+                        f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
+                        + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"]
+                    )
                 _maybe_accumulate(ctx, agg, f, i, [
                     "er_nc_cont_legacy", "er_nc_cont_new",
                     "er_amo_cont_legacy", "er_amo_cont_new",
-                    "total_er_db_cont",
                 ])
+                if "total_er_db_cont" in ctx.init_funding.columns:
+                    _maybe_accumulate(ctx, agg, f, i, ["total_er_db_cont"])
 
             if ctx.has_dc:
                 _phase_dc_contributions(f, i)
