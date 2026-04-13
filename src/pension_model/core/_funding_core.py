@@ -95,6 +95,10 @@ class FundingContext:
     drop_ref_class: Optional[str]
     all_classes: list  # class_names + ["drop"] if has_drop
 
+    # Plan capabilities — derived from config; each field earns its
+    # place via at least one phase-helper consumer.
+    has_cb: bool  # cash-balance leg present (benefit_types contains "cb")
+
     # Raw config sub-maps (for legacy paths that still read funding_raw)
     funding_policy: str
     return_scen_col: str
@@ -147,6 +151,9 @@ def _resolve_funding_context(
     drop_ref_class = funding_raw.get("drop_reference_class", class_names[0]) if class_names else None
     all_classes = class_names + (["drop"] if has_drop else [])
 
+    # Plan capabilities
+    has_cb = "cb" in constants.benefit_types
+
     # Strategy selection
     method = (fund.ava_smoothing or {}).get("method")
     if method == "corridor":
@@ -195,6 +202,7 @@ def _resolve_funding_context(
         has_drop=has_drop,
         drop_ref_class=drop_ref_class,
         all_classes=all_classes,
+        has_cb=has_cb,
         funding_policy=fund.funding_policy,
         return_scen_col=raw.get("economic", {}).get("return_scen", "assumption"),
         init_funding=funding_inputs["init_funding"],
@@ -223,6 +231,32 @@ def _resolve_er_rate_components(funding_raw: dict) -> list:
             "plans/txtrs/config/plan_config.json for an example schema."
         )
     return [RateComponent.from_config(c) for c in components]
+
+
+# ---------------------------------------------------------------------------
+# Year-loop phase helpers
+#
+# Each helper executes one phase of the year loop for one class's funding
+# frame. They're called from both compute functions with the same
+# signature so the two bodies converge on a common shape.
+# ---------------------------------------------------------------------------
+
+
+def _phase_payroll(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Project payroll columns for row ``i`` on one class's frame.
+
+    Writes ``total_payroll``, ``payroll_db_legacy``, ``payroll_db_new``,
+    and (when the plan has a cash-balance leg) ``payroll_cb_new``.
+
+    DC-leg payroll (``payroll_dc_legacy`` / ``payroll_dc_new``) and
+    plan-aggregate accumulation remain at the call site for now; they
+    move into helpers in later phase-extraction commits.
+    """
+    f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + ctx.payroll_growth)
+    f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
+    f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
+    if ctx.has_cb:
+        f.loc[i, "payroll_cb_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_cb_new_ratio"]
 
 
 def _compute_funding_corridor(
@@ -363,9 +397,7 @@ def _compute_funding_corridor(
             f = funding[cn]
             liab = liability_results[cn]
 
-            f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + payroll_growth)
-            f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
-            f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
+            _phase_payroll(f, i, ctx)
             f.loc[i, "payroll_dc_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_legacy_ratio"]
             f.loc[i, "payroll_dc_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_dc_new_ratio"]
 
@@ -843,10 +875,7 @@ def _compute_funding_gainloss(
         year = start_year + i
 
         # Payroll projection
-        f.loc[i, "total_payroll"] = f.loc[i - 1, "total_payroll"] * (1 + payroll_growth)
-        f.loc[i, "payroll_db_legacy"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_legacy_ratio"]
-        f.loc[i, "payroll_db_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_db_new_ratio"]
-        f.loc[i, "payroll_cb_new"] = f.loc[i, "total_payroll"] * f.loc[i, "payroll_cb_new_ratio"]
+        _phase_payroll(f, i, ctx)
 
         # Benefit payments from liability pipeline
         f.loc[i, "ben_payment_legacy"] = (
