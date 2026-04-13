@@ -1181,7 +1181,8 @@ def _compute_funding_corridor(
             _finalize_ava_with_drop(funding, agg, i, ctx)
 
         # --- UAL, funded ratios ---
-        for cn in all_classes:
+        # --- Phase 3: UAL / funded ratios / contribution totals ---
+        for cn in ctx.all_classes:
             f = funding[cn]
             _phase_ual_and_funded_ratios(f, i)
             _maybe_accumulate(ctx, agg, f, i, ["total_ava"])
@@ -1194,11 +1195,28 @@ def _compute_funding_corridor(
 
             _phase_er_cont_totals(f, i, ctx)
             _maybe_accumulate(ctx, agg, f, i, ["total_er_cont"])
+
+            # Gainloss-only output column (gated by init-schema presence).
+            if "tot_cont_rate" in f.columns:
+                f.loc[i, "tot_cont_rate"] = (
+                    (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
+                     + f.loc[i, "er_amo_cont_legacy"]
+                     + f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
+                     + f.loc[i, "er_amo_cont_new"] + f.loc[i, "solv_cont"])
+                    / f.loc[i, "total_payroll"]
+                ) if f.loc[i, "total_payroll"] > 0 else 0
+
+            # Real-cost metrics: today only emitted by gainloss strategies.
+            # 2.G.9 will replace this with a proper capability flag.
+            if ctx.ava_strategy.aggregation_level == "class":
+                _phase_real_cost_metrics(f, i, year, start_year, ctx.inflation)
+
             funding[cn] = f
 
-        agg.loc[i, "fr_mva"] = agg.loc[i, "total_mva"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
-        agg.loc[i, "fr_ava"] = agg.loc[i, "total_ava"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
-        agg.loc[i, "total_er_cont_rate"] = agg.loc[i, "total_er_cont"] / agg.loc[i, "total_payroll"] if agg.loc[i, "total_payroll"] > 0 else 0
+        if ctx.is_multi_class:
+            agg.loc[i, "fr_mva"] = agg.loc[i, "total_mva"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
+            agg.loc[i, "fr_ava"] = agg.loc[i, "total_ava"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
+            agg.loc[i, "total_er_cont_rate"] = agg.loc[i, "total_er_cont"] / agg.loc[i, "total_payroll"] if agg.loc[i, "total_payroll"] > 0 else 0
 
         # --- Amortization layers ---
         for cn in all_classes:
@@ -1451,21 +1469,42 @@ def _compute_funding_gainloss(
             ava_strategy.allocate_to_classes(agg, funding, ctx.all_classes, i)
             _finalize_ava_with_drop(funding, agg, i, ctx)
 
-        # Total AVA, UAL, funded ratios
-        _phase_ual_and_funded_ratios(f, i)
+        # --- Phase 3: UAL / funded ratios / contribution totals ---
+        for cn in ctx.all_classes:
+            f = funding[cn]
+            _phase_ual_and_funded_ratios(f, i)
+            _maybe_accumulate(ctx, agg, f, i, ["total_ava"])
+            _maybe_accumulate(ctx, agg, f, i, [
+                "ual_ava_legacy", "ual_ava_new", "total_ual_ava",
+            ])
+            _maybe_accumulate(ctx, agg, f, i, [
+                "ual_mva_legacy", "ual_mva_new", "total_ual_mva",
+            ])
 
-        # Contribution totals (total_er_cont, total_er_cont_rate)
-        _phase_er_cont_totals(f, i, ctx)
-        # Gainloss-path-only total contribution rate
-        f.loc[i, "tot_cont_rate"] = (
-            (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
-             + f.loc[i, "er_amo_cont_legacy"]
-             + f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
-             + f.loc[i, "er_amo_cont_new"] + f.loc[i, "solv_cont"])
-            / f.loc[i, "total_payroll"]) if f.loc[i, "total_payroll"] > 0 else 0
+            _phase_er_cont_totals(f, i, ctx)
+            _maybe_accumulate(ctx, agg, f, i, ["total_er_cont"])
 
-        # Real cost metrics (gainloss-path-only; capability-gated once unified)
-        _phase_real_cost_metrics(f, i, year, start_year, inflation)
+            # Gainloss-only output column (gated by init-schema presence).
+            if "tot_cont_rate" in f.columns:
+                f.loc[i, "tot_cont_rate"] = (
+                    (f.loc[i, "ee_nc_cont_legacy"] + f.loc[i, "er_nc_cont_legacy"]
+                     + f.loc[i, "er_amo_cont_legacy"]
+                     + f.loc[i, "ee_nc_cont_new"] + f.loc[i, "er_nc_cont_new"]
+                     + f.loc[i, "er_amo_cont_new"] + f.loc[i, "solv_cont"])
+                    / f.loc[i, "total_payroll"]
+                ) if f.loc[i, "total_payroll"] > 0 else 0
+
+            # Real-cost metrics: today only emitted by gainloss strategies.
+            # 2.G.9 will replace this with a proper capability flag.
+            if ctx.ava_strategy.aggregation_level == "class":
+                _phase_real_cost_metrics(f, i, year, start_year, ctx.inflation)
+
+            funding[cn] = f
+
+        if ctx.is_multi_class:
+            agg.loc[i, "fr_mva"] = agg.loc[i, "total_mva"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
+            agg.loc[i, "fr_ava"] = agg.loc[i, "total_ava"] / agg.loc[i, "total_aal"] if agg.loc[i, "total_aal"] != 0 else 0
+            agg.loc[i, "total_er_cont_rate"] = agg.loc[i, "total_er_cont"] / agg.loc[i, "total_payroll"] if agg.loc[i, "total_payroll"] > 0 else 0
 
         # Amortization layer updates — current hires (legacy)
         _roll_amort_layer(
