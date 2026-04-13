@@ -456,6 +456,37 @@ def _finalize_ava_with_drop(
             funding[cn] = f
 
 
+def _phase_ava_corridor_smoothing(
+    agg: pd.DataFrame, i: int, ava_strategy, dr_current: float, dr_new: float
+) -> None:
+    """Run plan-aggregate corridor AVA smoothing for both legs.
+
+    Used for plans whose AVA strategy is plan-level (``aggregation_level
+    == "plan"``). Calls ``ava_strategy.smooth`` once per leg against
+    the aggregate frame and writes ``exp_inv_earnings_ava_*``,
+    ``exp_ava_*``, ``ava_*``, ``alloc_inv_earnings_ava_*``, and
+    ``ava_base_*`` onto ``agg.loc[i, :]``.
+
+    The corridor strategy carries no extra state between years, so
+    ``state`` is always an empty dict. The per-class reallocation of
+    the aggregate's realized earnings is handled separately by
+    ``ava_strategy.allocate_to_classes``.
+    """
+    for leg, dr in (("legacy", dr_current), ("new", dr_new)):
+        result = ava_strategy.smooth(
+            ava_prev=agg.loc[i - 1, f"ava_{leg}"],
+            net_cf=agg.loc[i, f"net_cf_{leg}"],
+            mva=agg.loc[i, f"mva_{leg}"],
+            dr=dr,
+            state={},
+        )
+        agg.loc[i, f"exp_inv_earnings_ava_{leg}"] = result["exp_inv_earnings_ava"]
+        agg.loc[i, f"exp_ava_{leg}"] = result["exp_ava"]
+        agg.loc[i, f"ava_{leg}"] = result["ava"]
+        agg.loc[i, f"alloc_inv_earnings_ava_{leg}"] = result["alloc_inv_earnings_ava"]
+        agg.loc[i, f"ava_base_{leg}"] = result["ava_base"]
+
+
 def _phase_ava_gainloss_smoothing(
     f: pd.DataFrame, i: int, ava_strategy, dr_current: float, dr_new: float
 ) -> None:
@@ -915,31 +946,7 @@ def _compute_funding_corridor(
             funding[cn] = f
 
         # --- AVA smoothing at plan aggregate level ---
-        ava_leg = ava_strategy.smooth(
-            ava_prev=agg.loc[i - 1, "ava_legacy"],
-            net_cf=agg.loc[i, "net_cf_legacy"],
-            mva=agg.loc[i, "mva_legacy"],
-            dr=dr_current,
-            state={},
-        )
-        agg.loc[i, "exp_inv_earnings_ava_legacy"] = ava_leg["exp_inv_earnings_ava"]
-        agg.loc[i, "exp_ava_legacy"] = ava_leg["exp_ava"]
-        agg.loc[i, "ava_legacy"] = ava_leg["ava"]
-        agg.loc[i, "alloc_inv_earnings_ava_legacy"] = ava_leg["alloc_inv_earnings_ava"]
-        agg.loc[i, "ava_base_legacy"] = ava_leg["ava_base"]
-
-        ava_new = ava_strategy.smooth(
-            ava_prev=agg.loc[i - 1, "ava_new"],
-            net_cf=agg.loc[i, "net_cf_new"],
-            mva=agg.loc[i, "mva_new"],
-            dr=dr_new,
-            state={},
-        )
-        agg.loc[i, "exp_inv_earnings_ava_new"] = ava_new["exp_inv_earnings_ava"]
-        agg.loc[i, "exp_ava_new"] = ava_new["exp_ava"]
-        agg.loc[i, "ava_new"] = ava_new["ava"]
-        agg.loc[i, "alloc_inv_earnings_ava_new"] = ava_new["alloc_inv_earnings_ava"]
-        agg.loc[i, "ava_base_new"] = ava_new["ava_base"]
+        _phase_ava_corridor_smoothing(agg, i, ava_strategy, dr_current, dr_new)
 
         # --- Allocate AVA earnings to classes (no-op for class-level smoothing) ---
         ava_strategy.allocate_to_classes(agg, funding, all_classes, i)
