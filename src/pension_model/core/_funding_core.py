@@ -481,6 +481,54 @@ def _phase_ual_and_funded_ratios(f: pd.DataFrame, i: int) -> None:
     f.loc[i, "fr_ava"] = f.loc[i, "total_ava"] / total_aal if total_aal != 0 else 0
 
 
+def _phase_contributions(f: pd.DataFrame, i: int, ctx: FundingContext) -> None:
+    """Compute admin-expense rate and per-leg contribution dollars.
+
+    Reads rates that the contribution strategy has already written via
+    ``cont_strategy.compute_rates`` (``ee_nc_rate_*``, ``er_nc_rate_*``,
+    ``amo_rate_*``) and multiplies them by the applicable payroll
+    bases, writing eight dollar columns:
+
+        ee_nc_cont_legacy, ee_nc_cont_new
+        admin_exp_legacy, admin_exp_new
+        er_nc_cont_legacy, er_nc_cont_new       (includes admin_exp)
+        er_amo_cont_legacy, er_amo_cont_new
+
+    Also rolls ``admin_exp_rate`` forward from the prior row.
+
+    The new-leg denominator is ``payroll_db_new + payroll_cb_new``
+    when the plan has a cash-balance leg, else ``payroll_db_new``
+    alone. Applies to EE, admin, ER NC, and ER amo for the new leg.
+
+    Amortization uses the statutory (DB-payroll-denominator)
+    convention for both legs — the only convention exercised by
+    current plans.
+    """
+    f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
+
+    payroll_new = f.loc[i, "payroll_db_new"]
+    if ctx.has_cb:
+        payroll_new = payroll_new + f.loc[i, "payroll_cb_new"]
+
+    f.loc[i, "ee_nc_cont_legacy"] = f.loc[i, "ee_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "ee_nc_cont_new"] = f.loc[i, "ee_nc_rate_new"] * payroll_new
+
+    f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * payroll_new
+
+    f.loc[i, "er_nc_cont_legacy"] = (
+        f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+        + f.loc[i, "admin_exp_legacy"]
+    )
+    f.loc[i, "er_nc_cont_new"] = (
+        f.loc[i, "er_nc_rate_new"] * payroll_new
+        + f.loc[i, "admin_exp_new"]
+    )
+
+    f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
+    f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * payroll_new
+
+
 def _phase_cash_flow_and_solvency(f: pd.DataFrame, i: int, roa: float) -> None:
     """Compute DB cash flows, the solvency contribution, and net cash flow.
 
@@ -763,23 +811,13 @@ def _compute_funding_corridor(
                 f.loc[i, "er_dc_rate_legacy"] = dc_rate
                 f.loc[i, "er_dc_rate_new"] = dc_rate
 
-            f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
-            f.loc[i, "ee_nc_cont_legacy"] = db_ee_cont_rate * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "ee_nc_cont_new"] = db_ee_cont_rate * f.loc[i, "payroll_db_new"]
+            _phase_contributions(f, i, ctx)
             _accumulate_to_aggregate(agg, f, i, [
                 "ee_nc_cont_legacy", "ee_nc_cont_new",
             ])
-
-            f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_new"]
             _accumulate_to_aggregate(agg, f, i, [
                 "admin_exp_legacy", "admin_exp_new",
             ])
-
-            f.loc[i, "er_nc_cont_legacy"] = f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"] + f.loc[i, "admin_exp_legacy"]
-            f.loc[i, "er_nc_cont_new"] = f.loc[i, "er_nc_rate_new"] * f.loc[i, "payroll_db_new"] + f.loc[i, "admin_exp_new"]
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-            f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * f.loc[i, "payroll_db_new"]
             f.loc[i, "total_er_db_cont"] = (f.loc[i, "er_nc_cont_legacy"] + f.loc[i, "er_nc_cont_new"]
                                              + f.loc[i, "er_amo_cont_legacy"] + f.loc[i, "er_amo_cont_new"])
             _accumulate_to_aggregate(agg, f, i, [
@@ -1065,7 +1103,6 @@ def _compute_funding_gainloss(
 
         # Normal cost (rate written by helper using canonical denominator — GH #42)
         _phase_normal_cost(f, i, ctx)
-        payroll_new_total = f.loc[i, "payroll_db_new"] + f.loc[i, "payroll_cb_new"]
 
         # Liability gain/loss + AAL roll-forward
         _phase_liability_gl_and_aal(f, liab, i, dr_current, dr_new)
@@ -1078,29 +1115,8 @@ def _compute_funding_gainloss(
             amo_state={"cur_pay": pay_current, "fut_pay": pay_new},
         )
 
-        # Admin expense rate
-        f.loc[i, "admin_exp_rate"] = f.loc[i - 1, "admin_exp_rate"]
-
-        # Employee contribution amounts
-        f.loc[i, "ee_nc_cont_legacy"] = f.loc[i, "ee_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-        f.loc[i, "ee_nc_cont_new"] = f.loc[i, "ee_nc_rate_new"] * payroll_new_total
-
-        # Admin expenses
-        f.loc[i, "admin_exp_legacy"] = f.loc[i, "admin_exp_rate"] * f.loc[i, "payroll_db_legacy"]
-        f.loc[i, "admin_exp_new"] = f.loc[i, "admin_exp_rate"] * payroll_new_total
-
-        # Employer contribution amounts
-        f.loc[i, "er_nc_cont_legacy"] = (f.loc[i, "er_nc_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-                                          + f.loc[i, "admin_exp_legacy"])
-        f.loc[i, "er_nc_cont_new"] = (f.loc[i, "er_nc_rate_new"] * payroll_new_total
-                                       + f.loc[i, "admin_exp_new"])
-
-        # Employer amortization amounts
-        if funding_policy == "statutory":
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "payroll_db_legacy"]
-        else:
-            f.loc[i, "er_amo_cont_legacy"] = f.loc[i, "amo_rate_legacy"] * f.loc[i, "total_payroll"]
-        f.loc[i, "er_amo_cont_new"] = f.loc[i, "amo_rate_new"] * payroll_new_total
+        # Contribution dollars (admin rate + EE/admin/ER NC/ER amo per leg)
+        _phase_contributions(f, i, ctx)
 
         # Return on assets
         roa_row = ret_scen[ret_scen["year"] == year]
