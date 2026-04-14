@@ -371,8 +371,15 @@ def cmd_calibrate(args):
 
     t0 = time.time()
 
-    # Load config without calibration -> neutral (nc_cal=1.0, pvfb_term_current=0)
-    constants = load_plan_config(config_path, calibration_path=Path("__no_calibration__"))
+    # Load config with neutral per-class calibration, but keep the global
+    # cal_factor from calibration.json so the fitted per-class nc_cal
+    # residuals match R's two-stage decomposition (global × per-class).
+    existing_cal_path = config_path.parent / "calibration.json"
+    constants = load_plan_config(
+        config_path,
+        calibration_path=existing_cal_path,
+        skip_class_calibration=True,
+    )
     cal_factor = constants.benefit.cal_factor
 
     # Build calibration targets from config's valuation_inputs
@@ -396,7 +403,6 @@ def cmd_calibrate(args):
     print(format_diagnostics(results, targets, cal_factor))
 
     # Compare to existing calibration.json (e.g. R-derived values)
-    existing_cal_path = config_path.parent / "calibration.json"
     comparison = format_comparison(results, existing_cal_path)
     if comparison:
         print()

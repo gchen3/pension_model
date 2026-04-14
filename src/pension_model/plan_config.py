@@ -1469,7 +1469,8 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
 
 def load_plan_config(config_path: Path,
                      calibration_path: Optional[Path] = None,
-                     scenario_path: Optional[Path] = None) -> PlanConfig:
+                     scenario_path: Optional[Path] = None,
+                     skip_class_calibration: bool = False) -> PlanConfig:
     """Load a PlanConfig from a JSON file.
 
     Args:
@@ -1478,6 +1479,13 @@ def load_plan_config(config_path: Path,
         scenario_path: Optional path to a scenario JSON file. The
             ``overrides`` dict is deep-merged into the plan config before
             constructing PlanConfig. Calibration factors are not affected.
+        skip_class_calibration: When True and ``calibration_path`` exists,
+            read the global ``cal_factor`` from calibration.json but skip
+            the per-class ``nc_cal`` / ``pvfb_term_current`` overrides
+            (both stay at neutral defaults). Used by the ``calibrate``
+            CLI to fit fresh per-class factors on top of the existing
+            global ``cal_factor`` — preserves R's two-stage
+            decomposition (global rounding × per-class residual).
     """
     with open(config_path) as f:
         raw = json.load(f)
@@ -1510,8 +1518,12 @@ def load_plan_config(config_path: Path,
     if calibration_path is not None and calibration_path.exists():
         with open(calibration_path) as f:
             cal_raw = json.load(f)
-        calibration = cal_raw.get("classes", {})
-        # Override cal_factor from calibration file if present
+        if not skip_class_calibration:
+            calibration = cal_raw.get("classes", {})
+        # Override cal_factor from calibration file if present.
+        # Kept even when skip_class_calibration=True so the calibrate
+        # CLI fits per-class residuals on top of the existing global
+        # factor (R's two-stage decomposition).
         if "cal_factor" in cal_raw:
             ben = dict(ben)
             ben["cal_factor"] = cal_raw["cal_factor"]
