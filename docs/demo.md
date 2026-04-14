@@ -72,7 +72,20 @@ What happens, in order, when you run `pension-model run frs --no-test`:
 5.  **Funding model.** Apply contribution policy, asset smoothing (corridor for FRS, gain/loss deferral for TRS), and amortization to get contributions, AVA, MVA, and funded ratio each year.
 6.  **Write outputs.** `summary.csv`, `liability_stacked.csv`, and — with `--truth-table` — the Excel workbook sheets.
 
-> **Key functions / call graph:** *to be filled in before the meeting.* Code is frozen through the presentation, so function names and call sites can be pinned down without risk of drift.
+### Call graph — which function does each stage
+
+| # | Stage | Function | File : line |
+|---|---|---|---|
+| 1 | Load config | `load_plan_config(config_path, calibration_path=None, scenario_path=None) -> PlanConfig` | [plan\_config.py:1470](../src/pension_model/plan_config.py#L1470) |
+| 2 | Build benefit tables | `build_plan_benefit_tables(inputs_by_class, constants) -> dict` | [core/pipeline.py:72](../src/pension_model/core/pipeline.py#L72) |
+| 3 | Project workforce | `project_workforce(initial_active, separation_rates, benefit_decisions, mortality_rates, entrant_profile, class_name, start_year, model_period, …) -> dict` | [core/workforce.py:19](../src/pension_model/core/workforce.py#L19) |
+| 4 | Aggregate liabilities | `compute_active_liability`, `compute_term_liability`, `compute_retire_liability`, `compute_refund_liability` | [core/pipeline.py:260](../src/pension_model/core/pipeline.py#L260), [:375](../src/pension_model/core/pipeline.py#L375), [:458](../src/pension_model/core/pipeline.py#L458), [:420](../src/pension_model/core/pipeline.py#L420) |
+| 5 | Funding model | `run_funding_model(liability_results, funding_inputs, constants) -> dict` | [core/funding\_model.py:124](../src/pension_model/core/funding_model.py#L124) |
+| 6 | Write outputs | `_write_outputs`, `_emit_truth_table` | [cli.py:205](../src/pension_model/cli.py#L205), [:221](../src/pension_model/cli.py#L221) |
+
+The orchestrator that ties stages 2–4 together is [`run_plan_pipeline(constants, …)`](../src/pension_model/core/pipeline.py#L911) in `core/pipeline.py`. The top-level CLI driver is [`_run_plan`](../src/pension_model/cli.py#L313) (invoked by `cmd_run` at [cli.py:429](../src/pension_model/cli.py#L429), which is what `pension-model run frs --no-test` calls).
+
+**Reading strategy for a new contributor:** start at `cli.py:_run_plan`, follow it into `run_plan_pipeline` in `core/pipeline.py`, then let each stage's function pull you into the next module. Every stage function has a docstring describing inputs and outputs.
 
 ---
 
@@ -95,7 +108,28 @@ pension-model calibrate frs --write
 
 This runs the pipeline uncalibrated, compares aggregate AAL and NC against targets pulled from `valuation_inputs` in `plan_config.json`, derives the two factors per class, and writes `plans/frs/config/calibration.json`. Subsequent `run` commands pick that file up automatically.
 
-> **Worked example / function walkthrough:** *to be filled in before the meeting.*
+### What calibration actually does — worked example
+
+The command above:
+
+1. Calls [`cmd_calibrate`](../src/pension_model/cli.py#L351) in `cli.py`.
+2. Runs the pipeline once with **neutral** calibration (every class's `nc_cal = 1.0`, `pvfb_term_current = 0.0`) via `run_plan_pipeline(constants)`.
+3. Pulls per-class targets from `valuation_inputs` in `plan_config.json` using [`build_targets_from_config`](../src/pension_model/core/calibration.py#L120). Each target is a `CalibrationTargets(val_norm_cost, val_aal, …)` — the AAL and NC rate the plan's actuarial valuation reports.
+4. Calls [`run_calibration(liability_results, targets, start_year)`](../src/pension_model/core/calibration.py#L78), which loops classes and calls [`calibrate_class`](../src/pension_model/core/calibration.py#L45) for each.
+
+**The formulas** (from `calibrate_class`):
+
+```python
+model_nc  = liability_output.loc[year == start_year, "nc_rate_db_legacy_est"]
+model_aal = liability_output.loc[year == start_year, "total_aal_est"]
+
+nc_cal            = val_norm_cost / model_nc      # scale NC rate to hit AV target
+pvfb_term_current = val_aal - model_aal           # additive lump to close AAL gap
+```
+
+The two factors are then written to `plans/frs/config/calibration.json`. Every subsequent `pension-model run frs …` loads that file via `load_plan_config(..., calibration_path=...)` and applies the factors inside the pipeline.
+
+**Why two factors and not more?** `nc_cal` captures scaling discrepancies in normal cost (typically from decrement-table or salary-scale differences vs. the AV's assumptions). `pvfb_term_current` absorbs the AAL gap that's left over — mostly the difference between a cohort-level model and an AV's member-by-member liability. Two knobs is enough to hit two targets exactly.
 
 ---
 
@@ -266,7 +300,54 @@ low  = pd.read_csv("output/frs/low_return/summary.csv").set_index("year")
 (low["funded_ratio"] - base["funded_ratio"]).head(10)
 ```
 
-> **Deeper cells** (call `build_plan_benefit_tables`, `project_workforce`, `run_funding_model` stage by stage): *to be filled in before the meeting.* Code is frozen through the presentation, so the stage-by-stage cells can be pinned down now.
+**Deeper cells — drive the pipeline one stage at a time:**
+
+```python
+# --- cell 6: one call end-to-end (then pick apart the result) ---
+from pension_model.core.pipeline import run_plan_pipeline
+
+liability = run_plan_pipeline(cfg)   # dict {class_name: liability DataFrame}
+list(liability.keys())
+liability["regular"].columns.tolist()
+liability["regular"][["year", "total_aal_est", "total_payroll_est",
+                      "nc_rate_db_legacy_est"]].head()
+```
+
+```python
+# --- cell 7: stage 2 on its own — benefit tables ---
+from pension_model.core.data_loader import load_plan_inputs
+from pension_model.core.pipeline import build_plan_benefit_tables
+
+inputs_by_class = load_plan_inputs(cfg)          # reads stage-3 CSVs
+plan_tables = build_plan_benefit_tables(inputs_by_class, cfg)
+list(plan_tables.keys())                         # 'salary_benefit', 'ann_factor',
+                                                 # 'benefit', 'final_benefit',
+                                                 # 'benefit_val', ...
+bvt = plan_tables["benefit_val"]
+bvt[bvt["class_name"] == "regular"].head()       # PVFB / PVFS / NC per cohort
+```
+
+```python
+# --- cell 8: stage 5 on its own — funding model ---
+from pension_model.core.funding_model import load_funding_inputs, run_funding_model
+
+funding_inputs = load_funding_inputs(cfg.resolve_data_dir() / "funding")
+funding = run_funding_model(liability, funding_inputs, cfg)
+
+list(funding.keys())                             # classes + 'frs' (aggregate)
+agg = funding["frs"]
+agg[["year", "mva_eoy", "ava_eoy", "funded_ratio", "er_contribution"]].head(10)
+```
+
+```python
+# --- cell 9: quick sanity plot (matplotlib) ---
+import matplotlib.pyplot as plt
+
+agg.plot(x="year", y=["mva_eoy", "ava_eoy"], title="FRS assets: MVA vs AVA")
+plt.show()
+```
+
+The first five cells are safe to try out today. Cells 6–8 require that the `pension_model` package be importable in your Python environment — run `pip install -e .` from the repo root once, and they'll work for every subsequent session.
 
 ### 8b. VSCode / Positron debugger — true line-by-line stepping
 
@@ -283,7 +364,35 @@ When REPL isn’t enough, set a breakpoint and step through.
 5.  **Variables** panel (left) shows locals at the paused frame.
 6.  **Debug Console** (bottom) evaluates arbitrary Python against the paused frame — e.g. type `bt.shape` or `bt.query("eayos == 25").head()`.
 
-> **Minimal `.vscode/launch.json` snippet:** *to be filled in before the meeting.* Code is frozen through the presentation, so the CLI entry point is stable.
+**Minimal `.vscode/launch.json` snippet** — save as `.vscode/launch.json` at the repo root:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "pension-model: run frs (no tests)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pension_model.cli",
+      "args": ["run", "frs", "--no-test", "--truth-table"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    },
+    {
+      "name": "pension-model: calibrate frs",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pension_model.cli",
+      "args": ["calibrate", "frs"],
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    }
+  ]
+}
+```
+
+With that file in place, open the **Run and Debug** panel (Ctrl+Shift+D), pick a config from the dropdown at the top, set a breakpoint anywhere — e.g. in [`_run_plan`](../src/pension_model/cli.py#L313) or [`run_plan_pipeline`](../src/pension_model/core/pipeline.py#L911) — and press F5. `justMyCode: false` lets you step into pandas or numpy internals if you ever need to; flip it to `true` to keep stepping inside the model's own code.
 
 Mental model for an R user: the breakpoint + Variables panel is the Python analog to running R line by line with the environment pane open. The Debug Console is the Python analog to typing at the R prompt while paused.
 
