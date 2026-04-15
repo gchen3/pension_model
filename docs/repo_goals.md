@@ -50,6 +50,31 @@ Each step validates the previous one.
 - **Uniform output** — all plans produce the same columns in the same order; inapplicable values are NA. No plan-specific output paths or formats.
 - **Well tested** — automated tests compare each plan's output against the R baseline; actuarial identity checks (e.g., the MVA balance identity) verify that accounting relationships hold; year-by-year reasonableness checks catch obviously wrong numbers. Tests require an explicit plan name; no silent defaults.
 
+## Current Repo Boundary
+
+This repository owns the canonical pension-model runtime:
+
+- typed plan configuration and rule resolution
+- canonical CSV/JSON input loading
+- liability projection
+- funding projection
+- calibration
+- validation against R baselines and internal identities
+
+This repository does **not** aim to own every upstream data-extraction step from source PDFs, spreadsheets, or bespoke actuarial workbooks. Those sources should be normalized into the plan-specific `plans/{plan}/data/` layout before they enter the runtime model.
+
+The current runtime boundary is:
+
+```text
+plan config + canonical input tables
+  -> config validation / rule resolution
+  -> liability pipeline
+  -> funding pipeline
+  -> uniform outputs + validation
+```
+
+`docs/architecture_map.md` is the current map of that runtime structure. As code is refactored, the documentation should prefer these stage boundaries and stable public entry points over fragile function-by-function implementation detail.
+
 ## Current Scope
 
 - Two reference plans: **Florida Retirement System** (FRS, 7 membership classes, with DROP) and **Texas TRS** (1 class).

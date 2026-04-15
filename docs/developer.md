@@ -23,10 +23,10 @@ This project is a Python pension simulation model for **policy research**. It pr
 **Design principles:**
 
 - **Data-driven.** Plan rules (tiers, eligibility, benefit multipliers, early retirement reductions) live in `plan_config.json`, not in code branches. Adding a plan means adding data, not writing new Python.
-- **Reproduce first, then extend.** The baseline for each plan matches the R model output (bit-identical for FRS, within ~5 ppm for TRS). Improvements are made one at a time with measured impact.
+- **Reproduce first, then extend.** Exact reproduction of current R-backed baselines remains a hard constraint. Improvements are made one at a time with measured impact.
 - **Calibrated.** Small adjustment factors align model output with actuarial valuation (AV) reports rather than trying to match every detail from first principles.
 - **Fast.** Benefit tables are built in a single stacked pass across all membership classes. Workforce projection uses NumPy matrix operations. Only the stage-3-to-results solve time matters — data prep and tests can be slower.
-- **Well tested.** 248 tests verify R baseline match, actuarial identities, and year-by-year reasonableness.
+- **Well tested.** The test suite verifies R baseline match, actuarial identities, and year-by-year reasonableness.
 
 **Current scope.** Two reference plans are implemented: FRS (7 membership classes, DB/DC) and Texas TRS (1 class, DB/CB/DC). The model supports defined benefit, defined contribution, and cash balance benefit types.
 
@@ -40,12 +40,21 @@ This project is a Python pension simulation model for **policy research**. It pr
 
 ```
 src/
-  pension_model/              CLI, config loader, pipeline orchestration
-    core/                     All computation: benefit tables, workforce,
-                              calibration, funding projection
-  pension_config/             Type definitions, plan-specific adapters
-  pension_tools/              Stateless utility functions (actuarial math,
-                              salary projection, mortality lookups)
+  pension_model/
+    cli.py                    CLI entry point and output writing
+    plan_config.py            Stable public config API / compatibility surface
+    config_*.py               Config schema, loading, validation, helpers, resolvers
+    truth_table.py            R-vs-Python comparison helpers
+    core/
+      data_loader.py          Canonical input loading and normalization
+      pipeline.py             Liability orchestration
+      benefit_tables.py       Benefit-table builders
+      workforce.py            Workforce projection
+      pipeline_current.py     Current retiree / current term-vested liability pieces
+      pipeline_projected.py   Projected active / term / retire / refund liability pieces
+      funding_model.py        Public funding entry point
+      _funding_*.py           Funding implementation split by concern
+      calibration.py          Calibration computation and diagnostics
 plans/                        Per-plan config and data (not a Python package)
   frs/                        Florida Retirement System
   txtrs/                      Texas Teachers Retirement System
@@ -54,7 +63,10 @@ tests/                        Test suite
 docs/                         Documentation
 ```
 
-`pension_model` imports from `pension_config` and `pension_tools`; those two packages do not import from each other or from `pension_model`. `plans/` is pure data — no Python code.
+`plans/` is pure plan data — no Python code. The repo boundary is intentionally
+centered on canonical runtime inputs under `plans/{plan}/`; extracting those
+inputs from source PDFs or workbooks is upstream prep work, not part of the
+runtime architecture.
 
 ### Pipeline Data Flow
 
@@ -71,9 +83,11 @@ plan_config.json + calibration.json
   build_plan_benefit_tables()
     salary_headcount
       -> salary_benefit
-        -> ann_factor
-          -> benefit
-            -> benefit_val
+      -> separation_rate
+      -> ann_factor
+      -> benefit
+      -> final_benefit
+      -> benefit_val
         |
         v
   For each class:
@@ -106,14 +120,14 @@ This section traces `pension-model run frs --no-test` through the code.
 
 The CLI entry point is `main()` in `src/pension_model/cli.py`.
 
-- **`discover_plans()`** (`plan_config.py:1399`) scans `plans/*/config/plan_config.json` and returns a dict mapping plan names to config paths. Plans are auto-discovered — no registry to maintain.
-- **`load_plan_config()`** (`plan_config.py:1278`) reads `plan_config.json` into a frozen `PlanConfig` dataclass. It also loads `calibration.json` (per-class `nc_cal` and `pvfb_term_current`). If `--scenario` is provided, the scenario's overrides are deep-merged into the config before constructing `PlanConfig`.
+- **`discover_plans()`** scans `plans/*/config/plan_config.json` and returns a dict mapping plan names to config paths. Plans are auto-discovered — no registry to maintain.
+- **`load_plan_config()`** (`config_loading.py`) reads `plan_config.json` into a frozen `PlanConfig` dataclass. It also loads `calibration.json` (per-class `nc_cal` and `pvfb_term_current`). If `--scenario` is provided, the scenario's overrides are deep-merged into the config before constructing `PlanConfig`.
 
 `PlanConfig` is the single source of truth for the run. It replaces the old `ModelConstants` + `tier_logic.py` modules with table-driven lookups.
 
 ### 2. Data Loading
 
-**`load_plan_inputs()`** (`core/data_loader.py:391`) calls `load_plan_data()` for each class in `constants.classes`.
+**`load_plan_inputs()`** (`core/data_loader.py`) calls `load_plan_data()` for each class in `constants.classes`.
 
 Per-class files follow a naming convention: `{class}_salary.csv`, `{class}_headcount.csv`, `{class}_termination_rates.csv`, `{class}_retirement_rates.csv`. Shared files (mortality, salary growth, retiree distribution) have no class prefix. If a per-class file isn't found, the loader falls back to an unprefixed version.
 
@@ -121,7 +135,7 @@ Each class gets a dict containing salary/headcount DataFrames, decrement tables,
 
 ### 3. Benefit Table Construction
 
-**`build_plan_benefit_tables()`** (`core/pipeline.py:66`) orchestrates the five-table chain:
+**`build_plan_benefit_tables()`** (`core/pipeline.py`) orchestrates the stacked benefit-table chain:
 
 | Step | Builder | What It Produces |
 |------|---------|-----------------|
@@ -129,23 +143,24 @@ Each class gets a dict containing salary/headcount DataFrames, decrement tables,
 | 2 | `build_salary_benefit_table()` | Salary, FAS, DB employee balance, tier assignment, retirement status for each cohort trajectory |
 | 3 | `build_separation_rate_table()` | Combined termination + retirement rates by (entry_age, age, yos, tier) |
 | 4 | `build_ann_factor_table()` | Annuity factors, mortality-discount matrices, distribution ages |
-| 5 | `build_benefit_val_table()` | PVFB, PVFS, normal cost for each cohort — the inputs to liability calculation |
+| 5 | `build_benefit_table()` + `build_final_benefit_table()` | Benefit streams and retirement-selection adjustments |
+| 6 | `build_benefit_val_table()` | PVFB, PVFS, normal cost for each cohort — the inputs to liability calculation |
 
-Steps 1-3 are built per class (class-specific inputs), then stacked. Steps 4-5 operate on the stacked result. All builders are in `core/benefit_tables.py`.
+Steps 1-3 are built per class (class-specific inputs), then stacked. Steps 4-6 operate on the stacked result. All builders are in `core/benefit_tables.py`.
 
 ### 4. Workforce Projection and Liability
 
-**`project_workforce()`** (`core/workforce.py:19`) runs a matrix-based year-by-year projection for each class. Starting from the initial active population, it applies separation rates to move members from active to terminated, then to retired or refunded. New entrants are added each year based on the entrant profile.
+**`project_workforce()`** (`core/workforce.py`) runs a matrix-based year-by-year projection for each class. Starting from the initial active population, it applies separation rates to move members from active to terminated, then to retired or refunded. New entrants are added each year based on the entrant profile.
 
 The function returns four DataFrames: `wf_active`, `wf_term`, `wf_retire`, `wf_refund` — each with (entry_age, age, year, count).
 
-**`_project_and_aggregate_class()`** (`core/pipeline.py:780`) joins workforce output with benefit_val to compute liability components (active AAL, term AAL, retire AAL, refund AAL, normal cost, benefit payments). These are aggregated by year into a single liability DataFrame per class.
+`run_plan_pipeline()` in `core/pipeline.py` combines workforce output with the stacked benefit-value tables and the current-liability helpers from `pipeline_current.py` / `pipeline_projected.py` to compute liability components (active AAL, term AAL, retire AAL, refund AAL, normal cost, benefit payments). These are aggregated by year into a single liability DataFrame per class.
 
 ### 5. Funding Projection
 
-**`load_funding_inputs()`** (`core/funding_model.py:26`) reads `init_funding.csv` (initial assets and liabilities), `return_scenarios.csv` (investment returns by year), and `amort_layers.csv` (existing UAL amortization schedules).
+**`load_funding_inputs()`** (`core/funding_model.py`) reads `init_funding.csv` (initial assets and liabilities), `return_scenarios.csv` (investment returns by year), and `amort_layers.csv` (existing UAL amortization schedules).
 
-**`run_funding_model()`** (`core/funding_model.py`) is the public entry point. It dispatches on `funding.ava_smoothing.method` in plan config — `"corridor"` routes to `_compute_funding_corridor` (multi-class plans with plan-aggregate corridor smoothing); `"gain_loss"` routes to `_compute_funding_gainloss` (single-class plans with per-class 4-year deferral cascade). Both functions live in `core/_funding_core.py`. For each year both paths:
+**`run_funding_model()`** (`core/funding_model.py`) is the public entry point. It is a thin wrapper over the unified `_compute_funding()` driver in `core/_funding_core.py`. Setup/context resolution lives in `_funding_setup.py`, year-loop phases live in `_funding_phases.py`, strategy objects live in `_funding_strategies.py`, and low-level helpers live in `_funding_helpers.py`. For each year the funding model:
 
 1. Get payroll, benefits, AAL from liability output
 2. Apply calibration: `nc_rate = nc_rate_est * nc_cal`; `aal = aal_est + pvfb_term_current`
@@ -154,7 +169,7 @@ The function returns four DataFrames: `wf_active`, `wf_term`, `wf_retire`, `wf_r
 5. Compute UAL = AAL - AVA, amortize by layer
 6. Calculate employer contribution: NC + amortization + admin + DC
 
-`run_funding_model` always returns a dict shaped `{class_name: DataFrame, plan_name: aggregate_DataFrame, ...}`. For single-class plans the aggregate frame is a distinct copy of the class frame (no DataFrame aliasing). For multi-class plans the aggregate is built by accumulating each class's contributions year by year.
+`run_funding_model` always returns a dict shaped `{class_name: DataFrame, plan_name: aggregate_DataFrame, ...}`. For single-class plans the aggregate frame is a distinct copy of the class frame (no DataFrame aliasing). For multi-class plans the aggregate is built by accumulating each class's results year by year, and plans with DROP may also carry an explicit `"drop"` frame.
 
 ### 6. Output
 
@@ -213,7 +228,7 @@ The FRS config (`plans/frs/config/plan_config.json`) is the canonical reference.
 - **`tiers`** — array of tier definitions, each with `entry_year_min`/`entry_year_max`, eligibility rules (age/YOS conditions for normal and early retirement), and early retirement reduction parameters
 - **`benefit_multipliers`** — per-class, per-tier benefit formulas (flat rate or graded by YOS/age)
 - **`plan_design`** — DB/DC allocation ratios by hire cohort (before/after cutoff year)
-- **`acfr_data`** — per-class actuarial valuation targets: `val_norm_cost`, `val_aal`, `val_payroll`, `outflow`, `total_active_member`
+- **`valuation_inputs`** — per-class actuarial valuation targets: `val_norm_cost`, `val_aal`, `val_payroll`, `outflow`, `total_active_member`
 
 ### calibration.json
 
@@ -242,9 +257,9 @@ Calibration is computed **once** against the baseline AV and stored in `plans/{p
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
 │  AV targets      │     │  Uncalibrated     │     │  calibration.json   │
-│  (acfr_data in   │────>│  pipeline run     │────>│  (cal_factor,       │
-│   plan_config)   │     │  (nc_cal=1.0,     │     │   nc_cal per class, │
-│                  │     │   pvfb_term=0)    │     │   pvfb_term_current │
+│  (valuation_     │────>│  pipeline run     │────>│  (cal_factor,       │
+│   inputs in      │     │  (nc_cal=1.0,     │     │   nc_cal per class, │
+│   plan_config)   │     │   pvfb_term=0)    │     │   pvfb_term_current │
 └─────────────────┘     └──────────────────┘     │   per class)        │
                                                    └────────┬────────────┘
                                                             │
@@ -265,7 +280,7 @@ Multiplied into every DB benefit calculation in `core/benefit_tables.py` and `co
 
 **2. `nc_cal` (per class)**
 
-Fine-tunes each class's normal cost rate in the funding model: `nc_cal = AV_NC / model_NC`. Applied in `core/funding_model.py`. Values near 1.0 mean the model is accurate for that class; values far from 1.0 indicate the model is structurally off.
+Fine-tunes each class's normal cost rate in the funding model: `nc_cal = AV_NC / model_NC`. Applied during funding-frame setup in `core/_funding_setup.py` via helpers in `core/_funding_helpers.py`. Values near 1.0 mean the model is accurate for that class; values far from 1.0 indicate the model is structurally off.
 
 | Class | nc_cal | Interpretation |
 |-------|--------|----------------|
@@ -281,7 +296,7 @@ Fine-tunes each class's normal cost rate in the funding model: `nc_cal = AV_NC /
 
 **3. `pvfb_term_current` (per class)**
 
-Closes the AAL gap: `pvfb_term_current = AV_AAL - model_AAL`. This liability component is amortized as a growing payment stream over 50 years. Applied in `core/pipeline.py`.
+Closes the AAL gap: `pvfb_term_current = AV_AAL - model_AAL`. This liability component is amortized as a growing payment stream over 50 years. Applied in `core/pipeline_current.py`.
 
 ### When to Recalibrate
 
@@ -299,7 +314,7 @@ pension-model run frs                    # verify output and tests pass
 Calibration output includes:
 - **Normal cost calibration table**: model NC vs AV NC, nc_cal factor, flags for outliers
 - **AAL calibration table**: model AAL vs AV AAL, pvfb_term_current, gap percentage
-- **Out-of-sample checks**: quantities NOT calibrated (e.g., payroll) that serve as model quality indicators (shown only if `val_payroll` is provided in `acfr_data`)
+- **Out-of-sample checks**: quantities NOT calibrated (e.g., payroll) that serve as model quality indicators (shown only if `val_payroll` is provided in `valuation_inputs`)
 - **Comparison with existing calibration.json**: diff against stored values to detect drift
 
 ### Diagnostic Red Flags
@@ -315,10 +330,10 @@ These suggest model or data problems, not just calibration needs. Investigate be
 ```
 plans/{plan}/config/calibration.json   # Computed calibration factors (loaded at runtime)
 src/pension_model/core/calibration.py  # Calibration computation and diagnostics
-src/pension_model/plan_config.py       # PlanConfig loads calibration; acfr_data holds AV targets
+src/pension_model/plan_config.py       # Stable config API surface
 ```
 
-Calibration targets come from the `acfr_data` section of `plan_config.json`: `val_norm_cost` (per-class NC rate) and `val_aal` (per-class total AAL). Optional `val_payroll` enables out-of-sample payroll checks.
+Calibration targets come from the `valuation_inputs` section of `plan_config.json`: `val_norm_cost` (per-class NC rate) and `val_aal` (per-class total AAL). Optional `val_payroll` enables out-of-sample payroll checks.
 
 ---
 
@@ -366,9 +381,9 @@ Start by copying `plans/frs/config/plan_config.json` and customizing each sectio
 7. **`tiers`:** define tiers with entry year ranges and eligibility rules
 8. **`benefit_multipliers`:** per-class, per-tier benefit formulas
 9. **`plan_design`:** DB/DC allocation ratios
-10. **`acfr_data`:** per-class AV targets (`val_norm_cost`, `val_aal` at minimum)
+10. **`valuation_inputs`:** per-class AV targets (`val_norm_cost`, `val_aal` at minimum)
 
-For single-class plans, use `"classes": ["all"]` and a single entry in `acfr_data`, `benefit_multipliers`, etc.
+For single-class plans, use `"classes": ["all"]` and a single entry in `valuation_inputs`, `benefit_multipliers`, etc.
 
 ### Step 4: Run Initial Calibration
 
@@ -463,13 +478,13 @@ pension-model run frs --test-only        # tests only, no model run
 
 ### Test Suite Organization
 
-The test suite has 248 tests across 9 files in `tests/test_pension_model/`. They are organized into three layers:
+The test suite in `tests/test_pension_model/` is organized into three layers:
 
 **Layer 1: R Baseline Match (regression)**
 
 | File | What It Tests |
 |------|--------------|
-| `test_funding_baseline.py` | Full 31-year funding output compared column-by-column against R baselines in `plans/frs/baselines/`. Parametrized across all 7 FRS classes. This is the gold-standard "bit-identical to R" test. |
+| `test_funding_baseline.py` | Full 31-year funding output compared column-by-column against R baselines in `plans/frs/baselines/`. Parametrized across all 7 FRS classes. This is the gold-standard exact-regression test. |
 | `test_stage3_loader.py` | Data loading correctness: mortality matches Excel source, adjustment ratios work, design ratios match R, year-1 and year-30 AAL match R baselines. |
 
 **Layer 2: Actuarial Identity Checks (invariants)**
@@ -499,7 +514,7 @@ For Layer 3 (reasonableness), `test_rundown.py` can be extended with plan-specif
 
 ### Skipped Tests
 
-13 tests are marked `skip` because they depend on Excel source files not committed to the repo. These verify the original data extraction from actuarial valuation spreadsheets and are only needed during initial plan setup.
+Some tests are marked `skip` because they depend on Excel source files not committed to the repo. These verify the original data extraction from actuarial valuation spreadsheets and are only needed during initial plan setup.
 
 ---
 

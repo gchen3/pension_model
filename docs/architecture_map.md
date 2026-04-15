@@ -21,6 +21,11 @@ plan_config.json + CSV inputs
   -> summary / stacked outputs / truth table
 ```
 
+The repo boundary for that flow is intentionally narrow: the runtime expects
+canonical plan config plus canonical plan data under `plans/{plan}/`. Raw
+extraction from PDFs, Excel workbooks, or ad hoc actuarial source files is
+upstream prep work, not part of the core runtime architecture described here.
+
 ## Main Modules
 
 ### Config layer
@@ -33,6 +38,9 @@ plan_config.json + CSV inputs
 - [src/pension_model/config_resolvers.py](../src/pension_model/config_resolvers.py) is the public resolver surface for tier, COLA, benefit multiplier, and early-retirement reduction logic.
 
 The main architectural rule here is: config loading, config schema, compatibility helpers, and rule resolution are now separate concerns.
+
+Within that layer, `plan_config.py` is the compatibility/public surface; the
+other config modules are the implementation split behind it.
 
 ### Input-loading layer
 
@@ -146,6 +154,7 @@ The architecture is now substantially cleaner than before, but a few important b
 - File I/O and schema normalization are outside the main liability/funding math.
 - Config schema and config-resolution logic are separated from file loading.
 - Funding strategy selection is config-driven, but the unified year loop still lives in one driver.
+- `cli.py`, `plan_config.py`, `core/pipeline.py`, and `core/funding_model.py` are the main public orchestration surfaces; the underscore-prefixed funding modules are implementation details behind that surface.
 
 ## What Is Still Intentionally Transitional
 
