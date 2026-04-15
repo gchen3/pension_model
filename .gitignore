@@ -22,6 +22,10 @@ env/
 .Ruserdata
 *.rds
 
+# macOS cruft
+.DS_Store
+__MACOSX/
+
 # Default: ignore large data files everywhere
 *.csv
 *.xlsx
@@ -30,35 +34,20 @@ env/
 !plans/**/*.csv
 !plans/**/*.json
 
-# ── Legacy baseline_outputs (still referenced by some tests) ──
-!baseline_outputs/*_salary.csv
-!baseline_outputs/*_headcount.csv
-!baseline_outputs/salary_growth_table.csv
-!baseline_outputs/retiree_distribution.csv
-!baseline_outputs/init_funding_data.csv
-!baseline_outputs/return_scenarios.csv
-!baseline_outputs/current_amort_layers.csv
-!baseline_outputs/*_funding.csv
-!baseline_outputs/*_salary_headcount.csv
-!baseline_outputs/*_sep_rate.csv
-!baseline_outputs/*_bt_term.csv
-!baseline_outputs/*_af_retire.csv
-!baseline_outputs/*_benefit_data.csv
-!baseline_outputs/decrement_tables/*.csv
-
-# Raw Excel source data (R model reference)
-!R_model/R_model_original/pub-2010-headcount-mort-rates.xlsx
-!R_model/R_model_original/mortality-improvement-scale-mp-2018-rates.xlsx
-!R_model/R_model_original/Florida FRS inputs.xlsx
-!R_model/R_model_original/Reports/extracted inputs/*.xlsx
-
-# Memory bank
+# Memory bank (local notes, not for git)
 memory-bank/
 
 # Actuarial calculations — track reference materials, ignore large/scratch files
 actuarial_calculations/convert_doc.py
 actuarial_calculations/Winklevoss - 1993 - Pension mathematics with numerical illustrations.pdf
 
+# R model source projects (copied manually per environment)
+R_model/R_model_*/
+
 # Temp/output
 output/
 mathpix_output/
+
+# Scratch scripts (throwaway work; promote before committing)
+scripts/scratch/*
+!scripts/scratch/.gitkeep
