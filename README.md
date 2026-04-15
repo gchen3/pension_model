@@ -107,3 +107,5 @@ pension-model calibrate txtrs             # works for any plan
 ```
 
 See [docs/developer.md](docs/developer.md) for the full developer guide, including calibration architecture and diagnostics.
+
+For a concise model walkthrough, see [docs/architecture_map.md](docs/architecture_map.md).
