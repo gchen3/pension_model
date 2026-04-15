@@ -51,3 +51,4 @@ mathpix_output/
 # Scratch scripts (throwaway work; promote before committing)
 scripts/scratch/*
 !scripts/scratch/.gitkeep
+*.egg-info/
