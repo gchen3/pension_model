@@ -1,4 +1,14 @@
-This repo contains a Python pension simulation model. It was based initially on the Reason Foundation's R model of the Florida Retirement System, generalized for more plans, and optimized to reduce looping through classes.
+This repo contains a Python pension simulation model for policy research. It began as a reproduction of the Reason Foundation's R model of the Florida Retirement System, then evolved into a more general runtime that supports multiple plans through configuration and data rather than plan-specific Python code.
+
+The repository's scope is intentionally narrow: it owns the canonical runtime model, plan configuration, canonical plan input tables, calibration, and validation. Upstream extraction and normalization from source PDFs, spreadsheets, or other actuarial workbooks are expected to happen before inputs land in `plans/<plan>/data/`.
+
+Exact reproduction of current R-model results remains a hard constraint. Cleanup and generalization work should make the model easier to read and extend without changing outputs.
+
+## Documentation
+
+- [docs/repo_goals.md](docs/repo_goals.md) explains the project's goals, constraints, and current repo boundary.
+- [docs/developer.md](docs/developer.md) is the main developer guide, including runtime flow, plan structure, calibration, and testing.
+- [docs/architecture_map.md](docs/architecture_map.md) is the shortest map of the current config, liability, and funding architecture.
 
 ## Requirements
 
@@ -98,7 +108,7 @@ instead of the assumption (discount rate) column.
 
 ## Calibration
 
-Calibration computes adjustment factors so the model's baseline output matches the actuarial valuation report. Run it after changing benefit formulas, data, or decrement tables -- not after changing policy assumptions.
+Calibration computes adjustment factors so the model's baseline output matches the actuarial valuation report. Calibration is part of the baseline setup, not scenario analysis: run it after changing benefit formulas, canonical plan data, decrement tables, or valuation targets, but not after changing policy assumptions for a scenario run.
 
 ```bash
 pension-model calibrate frs               # compute calibration and print diagnostics
@@ -106,6 +116,6 @@ pension-model calibrate frs --write       # also write factors to plans/frs/conf
 pension-model calibrate txtrs             # works for any plan
 ```
 
-See [docs/developer.md](docs/developer.md) for the full developer guide, including calibration architecture and diagnostics.
+`calibration.json` is loaded as part of plan configuration and then reused by baseline and scenario runs until the underlying baseline setup changes.
 
-For a concise model walkthrough, see [docs/architecture_map.md](docs/architecture_map.md).
+See [docs/developer.md](docs/developer.md) for calibration architecture and diagnostics, and [docs/architecture_map.md](docs/architecture_map.md) for the current runtime split between config, liability, and funding responsibilities.
