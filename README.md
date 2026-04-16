@@ -50,6 +50,14 @@ pension-model run frs --truth-table       # also write R-vs-Python truth table t
 pension-model run frs --no-test --scenario scenarios/low_return.json  # run a scenario
 ```
 
+By default, `pension-model run <plan>` and `pension-model run <plan> --test-only`
+run a shared-core plus plan-specific validation subset rather than the full
+repository test suite. `--no-test` still skips tests entirely.
+
+For the broader test taxonomy and long-run test/run model, see
+[docs/testing_strategy.md](docs/testing_strategy.md). For a full-suite run,
+use `pytest` directly.
+
 Plans are auto-discovered from `plans/<plan>/config/plan_config.json`. Each plan
 directory contains everything needed to run that plan:
 
