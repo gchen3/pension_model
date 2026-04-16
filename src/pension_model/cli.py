@@ -286,8 +286,22 @@ def _execute_pipeline(constants):
             + "\n".join(f"  - {p}" for p in missing)
         )
 
-    print("  Building benefit tables, workforce, and liabilities (this may take a while)...")
-    liability = run_plan_pipeline(constants, progress=True)
+    seen_stages = set()
+
+    def _print_stage(stage_name: str) -> None:
+        if stage_name in seen_stages:
+            return
+        stage_messages = {
+            "prepare": "\n  Loading and preparing runtime inputs...",
+            "benefit_tables": "  Building benefit tables (this may take a while)...",
+            "liability": "  Projecting workforce and liabilities...",
+        }
+        message = stage_messages.get(stage_name)
+        if message:
+            seen_stages.add(stage_name)
+            print(message)
+
+    liability = run_plan_pipeline(constants, progress=True, on_stage=_print_stage)
 
     liability_frames = []
     for cn in constants.classes:
@@ -323,12 +337,10 @@ def _run_plan(constants, args):
     print("=" * 60)
 
     t0 = time.time()
+    print_parameters(constants)
     liability, funding, liability_stacked = _execute_pipeline(constants)
     elapsed = time.time() - t0
     print(f"  Pipeline complete: {elapsed:.0f}s")
-
-    # Parameters
-    print_parameters(constants)
 
     # Summary
     if scenario:
@@ -513,6 +525,52 @@ def cmd_list(args):
         print(f"  {name:20s} {rel}")
 
 
+def cmd_benchmark(args):
+    """Profile runtime stages for one or more plans."""
+    from pension_model.config_loading import discover_plans, load_plan_config
+    from pension_model.core.profiling import profile_plan_runtime
+
+    plans = discover_plans()
+    requested = [args.plan] if args.plan else sorted(plans)
+    if not requested:
+        print("No plans found under plans/")
+        sys.exit(1)
+
+    for plan_name in requested:
+        if plan_name not in plans:
+            available = ", ".join(sorted(plans)) or "(none found)"
+            print(f"Unknown plan: {plan_name!r}. Available plans: {available}")
+            sys.exit(2)
+
+        config_path = plans[plan_name]
+        cal_path = config_path.parent / "calibration.json"
+        constants = load_plan_config(
+            config_path,
+            calibration_path=cal_path if cal_path.exists() else None,
+        )
+
+        print(f"\n{plan_name}:")
+        for iteration in range(args.repeats):
+            profile = profile_plan_runtime(
+                constants,
+                include_funding=args.include_funding,
+                research_mode=args.research_mode,
+            )
+            summary = profile.as_dict()
+            timings = summary["stage_timings"]
+            timing_parts = [
+                f"load_inputs={timings['load_inputs']:.2f}s",
+                f"build_plan_benefit_tables={timings['build_plan_benefit_tables']:.2f}s",
+                f"split_plan_tables={timings['split_plan_tables']:.2f}s",
+                f"liability={summary['liability_timing']:.2f}s",
+            ]
+            if summary["funding_timing"] is not None:
+                timing_parts.append(f"funding={summary['funding_timing']:.2f}s")
+            if summary["retains_plan_tables"]:
+                timing_parts.append("research_mode=on")
+            print(f"  run {iteration + 1}: " + ", ".join(timing_parts))
+
+
 def main():
     warnings.filterwarnings("ignore")
 
@@ -540,6 +598,16 @@ def main():
 
     subparsers.add_parser("list", help="List discovered plans")
 
+    bench = subparsers.add_parser("benchmark", help="Profile runtime stages for one or more plans")
+    bench.add_argument("plan", nargs="?", choices=discovered or None,
+                       help=f"Plan to benchmark. Omit to benchmark all discovered plans.")
+    bench.add_argument("--repeats", type=int, default=2,
+                       help="Number of benchmark runs per plan (default: 2)")
+    bench.add_argument("--include-funding", action="store_true",
+                       help="Also profile the funding stage")
+    bench.add_argument("--research-mode", action="store_true",
+                       help="Retain full stacked plan tables for debug and research inspection")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -552,3 +620,5 @@ def main():
         cmd_calibrate(args)
     elif args.command == "list":
         cmd_list(args)
+    elif args.command == "benchmark":
+        cmd_benchmark(args)

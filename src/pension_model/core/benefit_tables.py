@@ -17,6 +17,15 @@ import numpy as np
 import pandas as pd
 from pension_model.config_schema import EARLY, NORM, VESTED, PlanConfig
 
+try:
+    from numba import njit as _njit
+except ImportError:
+    def _njit(func=None, **kwargs):
+        """No-op fallback when numba is not installed."""
+        if func is not None:
+            return func
+        return lambda f: f
+
 def _get_salary_growth_col(class_name: str, constants=None) -> str:
     """Resolve salary growth column name for a class.
 
@@ -568,6 +577,88 @@ def build_separation_rate_table(
 # 3. Annuity factor table (cumulative survival × discount)
 # ---------------------------------------------------------------------------
 
+
+@_njit(cache=True)
+def _compute_annuity_metrics(
+    mort_arr: np.ndarray,
+    dr_arr: np.ndarray,
+    cola_arr: np.ndarray,
+    n_per_cohort: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute annuity cumulative metrics from contiguous cohort slices."""
+    n = len(mort_arr)
+    cum_dr = np.empty(n, dtype=np.float64)
+    cum_mort = np.empty(n, dtype=np.float64)
+    cum_cola = np.empty(n, dtype=np.float64)
+    cum_mort_dr = np.empty(n, dtype=np.float64)
+    cum_mort_dr_cola = np.empty(n, dtype=np.float64)
+    ann_factor = np.empty(n, dtype=np.float64)
+
+    start = 0
+    for cohort_len in n_per_cohort:
+        stop = start + cohort_len
+
+        cum_dr[start] = 1.0
+        cum_mort[start] = 1.0
+        cum_cola[start] = 1.0
+        cum_mort_dr[start] = 1.0
+        cum_mort_dr_cola[start] = 1.0
+
+        for idx in range(start + 1, stop):
+            prev = idx - 1
+            cur_cum_dr = cum_dr[prev] * (1.0 + dr_arr[prev])
+            cur_cum_mort = cum_mort[prev] * (1.0 - mort_arr[prev])
+            cur_cum_cola = cum_cola[prev] * (1.0 + cola_arr[prev])
+            cum_dr[idx] = cur_cum_dr
+            cum_mort[idx] = cur_cum_mort
+            cum_cola[idx] = cur_cum_cola
+            cur_cum_mort_dr = cur_cum_mort / cur_cum_dr
+            cum_mort_dr[idx] = cur_cum_mort_dr
+            cum_mort_dr_cola[idx] = cur_cum_mort_dr * cur_cum_cola
+
+        running = 0.0
+        for idx in range(stop - 1, start - 1, -1):
+            running += cum_mort_dr_cola[idx]
+            denom = cum_mort_dr_cola[idx]
+            ann_factor[idx] = running / denom if denom != 0.0 else 0.0
+
+        start = stop
+
+    return cum_dr, cum_mort, cum_cola, cum_mort_dr, cum_mort_dr_cola, ann_factor
+
+
+@_njit(cache=True)
+def _compute_cb_annuity_metrics(
+    cum_mort: np.ndarray,
+    cum_cola: np.ndarray,
+    class_codes: np.ndarray,
+    n_per_cohort: np.ndarray,
+    expected_icr_by_code: np.ndarray,
+    acr: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute CB annuity metrics from contiguous cohort slices."""
+    n = len(cum_mort)
+    surv_icr = np.full(n, np.nan, dtype=np.float64)
+    ann_factor_acr = np.full(n, np.nan, dtype=np.float64)
+
+    start = 0
+    for cohort_len in n_per_cohort:
+        stop = start + cohort_len
+        expected_icr = expected_icr_by_code[class_codes[start]]
+        if expected_icr >= 0.0:
+            running = 0.0
+            for offset in range(cohort_len - 1, -1, -1):
+                idx = start + offset
+                period = float(offset)
+                surv_icr_val = cum_mort[idx] / (1.0 + expected_icr) ** period
+                surv_acr_cola = cum_mort[idx] * cum_cola[idx] / (1.0 + acr) ** period
+                surv_icr[idx] = surv_icr_val
+                running += surv_acr_cola
+                ann_factor_acr[idx] = running / surv_acr_cola if surv_acr_cola != 0.0 else 0.0
+        start = stop
+
+    return surv_icr, ann_factor_acr
+
 def build_ann_factor_table(
     salary_benefit_table: pd.DataFrame,
     compact_mortality_by_class: dict,
@@ -616,10 +707,18 @@ def build_ann_factor_table(
     term_age_c = cohorts["entry_age"].values + cohorts["yos"].values
     cohorts = cohorts[term_age_c <= max_age].reset_index(drop=True)
 
+    class_labels = np.asarray(list(pd.unique(cohorts["class_name"])), dtype=object)
+    class_to_code = {cn: i for i, cn in enumerate(class_labels.tolist())}
+
     # --- 2. Cross-join with dist_age range, filter dist_age >= term_age ---
     term_ages = cohorts["entry_age"].values + cohorts["yos"].values
     n_per_cohort = max_age - term_ages + 1
-    cn_arr = np.repeat(cohorts["class_name"].values, n_per_cohort)
+    cohort_class_codes = np.array(
+        [class_to_code[str(cn)] for cn in cohorts["class_name"].values],
+        dtype=np.int16,
+    )
+    class_code_arr = np.repeat(cohort_class_codes, n_per_cohort)
+    cn_arr = class_labels[class_code_arr]
     ey_arr = np.repeat(cohorts["entry_year"].values, n_per_cohort).astype(np.int64)
     ea_arr = np.repeat(cohorts["entry_age"].values, n_per_cohort).astype(np.int64)
     yos_arr = np.repeat(cohorts["yos"].values, n_per_cohort).astype(np.int64)
@@ -643,8 +742,9 @@ def build_ann_factor_table(
     # --- 6. Mortality — per-class slice ---
     is_retiree_arr = rs_da >= EARLY
     mort_arr = np.zeros(len(dist_age_arr), dtype=np.float64)
-    for cn, cm in compact_mortality_by_class.items():
-        cmask = cn_arr == cn
+    for code, cn in enumerate(class_labels.tolist()):
+        cm = compact_mortality_by_class[cn]
+        cmask = class_code_arr == code
         if not cmask.any():
             continue
         sub_ages = dist_age_arr[cmask]
@@ -654,7 +754,17 @@ def build_ann_factor_table(
         ret_rates = cm.get_rates_vec(sub_ages, sub_years, is_retiree=True)
         mort_arr[cmask] = np.where(sub_is_ret, ret_rates, emp_rates)
 
-    # --- 7. Assemble DataFrame, sort, compute cumulative products ---
+    # --- 7. Compute cumulative metrics from contiguous cohort slices ---
+    (
+        cum_dr_arr,
+        cum_mort_arr,
+        cum_cola_arr,
+        cum_mort_dr_arr,
+        cum_mort_dr_cola_arr,
+        ann_factor_arr,
+    ) = _compute_annuity_metrics(mort_arr, dr_arr, cola_arr, n_per_cohort.astype(np.int64))
+
+    # --- 8. Assemble DataFrame once, after the heavy array work ---
     df = pd.DataFrame({
         "class_name": cn_arr,
         "entry_year": ey_arr,
@@ -668,59 +778,31 @@ def build_ann_factor_table(
         "ret_status_at_da": rs_da,
         "dr": dr_arr,
         "cola": cola_arr,
+        "cum_dr": cum_dr_arr,
+        "cum_mort": cum_mort_arr,
+        "cum_cola": cum_cola_arr,
+        "cum_mort_dr": cum_mort_dr_arr,
+        "cum_mort_dr_cola": cum_mort_dr_cola_arr,
+        "ann_factor": ann_factor_arr,
     })
 
-    group_cols = ["class_name", "entry_year", "entry_age", "yos"]
-    df = df.sort_values(group_cols + ["dist_age"]).reset_index(drop=True)
-
-    g = df.groupby(group_cols)
-    dr_lagged = g["dr"].shift(1, fill_value=0.0)
-    mort_lagged = g["mort_final"].shift(1, fill_value=0.0)
-    cola_lagged = g["cola"].shift(1, fill_value=0.0)
-
-    df["cum_dr"] = (1 + dr_lagged).groupby([df[c] for c in group_cols]).cumprod()
-    df["cum_mort"] = (1 - mort_lagged).groupby([df[c] for c in group_cols]).cumprod()
-    df["cum_cola"] = (1 + cola_lagged).groupby([df[c] for c in group_cols]).cumprod()
-
-    df["cum_mort_dr"] = df["cum_mort"] / df["cum_dr"]
-    df["cum_mort_dr_cola"] = df["cum_mort_dr"] * df["cum_cola"]
-
-    grp = df.groupby(group_cols)["cum_mort_dr_cola"]
-    group_total = grp.transform("sum")
-    cum_forward = grp.cumsum()
-    rev_cumsum = group_total - cum_forward + df["cum_mort_dr_cola"]
-    df["ann_factor"] = rev_cumsum / df["cum_mort_dr_cola"]
-
-    # --- 8. CB annuity factors (per class that has CB) ---
+    # --- 9. CB annuity factors (per class that has CB) ---
     if expected_icr_by_class:
         cb_cfg = constants.cash_balance
         if cb_cfg is not None:
             acr = cb_cfg.get("annuity_conversion_rate", 0.04)
-            surv_icr_col = np.full(len(df), np.nan, dtype=np.float64)
-            ann_factor_acr_col = np.full(len(df), np.nan, dtype=np.float64)
-
+            expected_icr_by_code = np.full(len(class_labels), -1.0, dtype=np.float64)
             for cn, expected_icr in expected_icr_by_class.items():
-                cmask = (df["class_name"].values == cn)
-                if not cmask.any():
-                    continue
-                sub = df.loc[cmask]
-                periods = sub.groupby(group_cols).cumcount().values
+                expected_icr_by_code[class_to_code[cn]] = expected_icr
 
-                surv_icr = sub["cum_mort"].values / (1 + expected_icr) ** periods
-                surv_acr = sub["cum_mort"].values / (1 + acr) ** periods
-                surv_acr_cola = surv_acr * sub["cum_cola"].values
-
-                sac = pd.Series(surv_acr_cola, index=sub.index)
-                grp2 = sac.groupby([sub[c] for c in group_cols])
-                gt = grp2.transform("sum")
-                cf = grp2.cumsum()
-                rev_cumsum_acr = gt - cf + sac
-                ann_factor_acr = (rev_cumsum_acr / sac).values
-
-                positions = np.where(cmask)[0]
-                surv_icr_col[positions] = surv_icr
-                ann_factor_acr_col[positions] = ann_factor_acr
-
+            surv_icr_col, ann_factor_acr_col = _compute_cb_annuity_metrics(
+                cum_mort_arr,
+                cum_cola_arr,
+                class_code_arr.astype(np.int64),
+                n_per_cohort.astype(np.int64),
+                expected_icr_by_code,
+                acr,
+            )
             if not np.all(np.isnan(surv_icr_col)):
                 df["surv_icr"] = surv_icr_col
                 df["ann_factor_acr"] = ann_factor_acr_col
@@ -763,7 +845,26 @@ def build_benefit_table(
 
     cal = constants.benefit.cal_factor
 
-    df = ann_factor_table.copy()
+    keep_cols = [
+        "class_name",
+        "entry_year",
+        "entry_age",
+        "dist_year",
+        "dist_age",
+        "yos",
+        "term_year",
+        "tier_id_at_da",
+        "ret_status_at_da",
+        "cola",
+        "cum_mort_dr",
+        "ann_factor",
+    ]
+    if "surv_icr" in ann_factor_table.columns:
+        keep_cols.append("surv_icr")
+    if "ann_factor_acr" in ann_factor_table.columns:
+        keep_cols.append("ann_factor_acr")
+
+    df = ann_factor_table[keep_cols].copy()
     df["term_age"] = df["entry_age"] + df["yos"]
 
     # Join salary/benefit data for FAS and db_ee_balance (+ CB columns if present).
@@ -828,7 +929,28 @@ def build_benefit_table(
             + (1 - is_vested) * df["cb_balance"]
         )
 
-    return df
+    out_cols = [
+        "class_name",
+        "entry_year",
+        "entry_age",
+        "dist_year",
+        "dist_age",
+        "yos",
+        "term_year",
+        "term_age",
+        "ret_status_at_da",
+        "cola",
+        "cum_mort_dr",
+        "db_ee_balance",
+        "db_benefit",
+        "ann_factor_term",
+        "pvfb_db_at_term_age",
+    ]
+    for col in ["cb_balance", "cb_benefit", "pv_cb_benefit"]:
+        if col in df.columns:
+            out_cols.append(col)
+
+    return df[out_cols]
 
 
 def build_final_benefit_table(benefit_table: pd.DataFrame,
@@ -909,16 +1031,6 @@ def build_final_benefit_table(benefit_table: pd.DataFrame,
 # ---------------------------------------------------------------------------
 # 5. Benefit valuation table (PVFB, PVFS, NC)
 # ---------------------------------------------------------------------------
-
-try:
-    from numba import njit as _njit
-except ImportError:
-    def _njit(func=None, **kwargs):
-        """No-op fallback when numba is not installed."""
-        if func is not None:
-            return func
-        return lambda f: f
-
 
 @_njit(cache=True)
 def _npv(rate, cashflows):
@@ -1187,51 +1299,101 @@ def build_benefit_val_table(
         for col in cb_join_cols:
             sbt[col] = sbt[col].fillna(0.0)
 
-    # Compute PVFB, PVFS, NC within each (class_name, entry_year, entry_age) group
-    def _compute_pv(g):
-        g = g.sort_values("yos")
-        sep = np.nan_to_num(g["separation_rate"].values.astype(float), 0.0)
-        rp = np.nan_to_num(g["remaining_prob"].values.astype(float), 0.0)
-        dr_arr = g["dr"].values.astype(float)
-        val = np.nan_to_num(g["pvfb_db_wealth_at_term_age"].values.astype(float), 0.0)
-        sal = g["salary"].values.astype(float)
+    sbt = sbt.sort_values(["class_name", "entry_year", "entry_age", "yos"]).reset_index(drop=True)
+    n_rows = len(sbt)
+
+    pvfb_db_current = np.zeros(n_rows, dtype=np.float64)
+    pvfs_current = np.zeros(n_rows, dtype=np.float64)
+    indv_norm_cost = np.zeros(n_rows, dtype=np.float64)
+    pvfnc_db = np.zeros(n_rows, dtype=np.float64)
+
+    if has_cb:
+        pvfb_cb_current = np.zeros(n_rows, dtype=np.float64)
+        indv_norm_cost_cb = np.zeros(n_rows, dtype=np.float64)
+        pvfnc_cb = np.zeros(n_rows, dtype=np.float64)
+
+    class_arr = sbt["class_name"].to_numpy()
+    entry_year_arr = sbt["entry_year"].to_numpy(dtype=np.int64)
+    entry_age_arr = sbt["entry_age"].to_numpy(dtype=np.int64)
+    sep_arr_all = np.nan_to_num(sbt["separation_rate"].to_numpy(dtype=np.float64), nan=0.0)
+    rp_arr_all = np.nan_to_num(sbt["remaining_prob"].to_numpy(dtype=np.float64), nan=0.0)
+    dr_arr_all = sbt["dr"].to_numpy(dtype=np.float64)
+    val_arr_all = np.nan_to_num(
+        sbt["pvfb_db_wealth_at_term_age"].to_numpy(dtype=np.float64), nan=0.0
+    )
+    sal_arr_all = sbt["salary"].to_numpy(dtype=np.float64)
+
+    if n_rows > 0:
+        boundaries = np.empty(n_rows, dtype=bool)
+        boundaries[0] = True
+        boundaries[1:] = (
+            (class_arr[1:] != class_arr[:-1])
+            | (entry_year_arr[1:] != entry_year_arr[:-1])
+            | (entry_age_arr[1:] != entry_age_arr[:-1])
+        )
+        starts = np.flatnonzero(boundaries)
+        stops = np.append(starts[1:], n_rows)
+    else:
+        starts = np.array([], dtype=np.int64)
+        stops = np.array([], dtype=np.int64)
+
+    if has_cb:
+        cb_ee_bal_all = np.nan_to_num(sbt["cb_ee_balance"].to_numpy(dtype=np.float64), nan=0.0)
+        cb_ee_cont_all = np.nan_to_num(sbt["cb_ee_cont"].to_numpy(dtype=np.float64), nan=0.0)
+        cb_er_bal_all = np.nan_to_num(sbt["cb_er_balance"].to_numpy(dtype=np.float64), nan=0.0)
+        cb_er_cont_all = np.nan_to_num(sbt["cb_er_cont"].to_numpy(dtype=np.float64), nan=0.0)
+        yos_arr_all = sbt["yos"].to_numpy(dtype=np.float64)
+        sep_type_all = sbt["sep_type"].to_numpy()
+        surv_icr_all = np.nan_to_num(sbt["surv_icr"].to_numpy(dtype=np.float64), nan=0.0)
+        ann_acr_all = np.nan_to_num(sbt["ann_factor_acr"].to_numpy(dtype=np.float64), nan=0.0)
+        ann_adj_all = np.nan_to_num(sbt["ann_factor_adj_dr"].to_numpy(dtype=np.float64), nan=0.0)
+
+    for start, stop in zip(starts, stops):
+        sep = sep_arr_all[start:stop]
+        rp = rp_arr_all[start:stop]
+        dr_arr = dr_arr_all[start:stop]
+        val = val_arr_all[start:stop]
+        sal = sal_arr_all[start:stop]
 
         pvfb = _get_pvfb(sep, dr_arr, val)
         pvfs = _get_pvfs(rp, dr_arr, sal)
-
         nc_rate = pvfb[0] / pvfs[0] if pvfs[0] > 0 else 0.0
 
-        g["pvfb_db_wealth_at_current_age"] = pvfb
-        g["pvfs_at_current_age"] = pvfs
-        g["indv_norm_cost"] = nc_rate
-        g["pvfnc_db"] = nc_rate * pvfs
+        pvfb_db_current[start:stop] = pvfb
+        pvfs_current[start:stop] = pvfs
+        indv_norm_cost[start:stop] = nc_rate
+        pvfnc_db[start:stop] = nc_rate * pvfs
 
-        # CB PVFB — using real annuity factor data from ann_factor_table
         if has_cb:
-            cb_ee_bal = np.nan_to_num(g["cb_ee_balance"].values.astype(float), 0.0)
-            cb_ee_cont = np.nan_to_num(g["cb_ee_cont"].values.astype(float), 0.0)
-            cb_er_bal = np.nan_to_num(g["cb_er_balance"].values.astype(float), 0.0)
-            cb_er_cont = np.nan_to_num(g["cb_er_cont"].values.astype(float), 0.0)
-            yos_arr = g["yos"].values.astype(float)
-            sep_type_arr = g["sep_type"].values
-            surv_icr_arr = np.nan_to_num(g["surv_icr"].values.astype(float), 0.0)
-            ann_acr_arr = np.nan_to_num(g["ann_factor_acr"].values.astype(float), 0.0)
-            ann_adj_arr = np.nan_to_num(g["ann_factor_adj_dr"].values.astype(float), 0.0)
-
             pvfb_cb = _get_pvfb_cb(
-                cb_ee_bal, cb_ee_cont, cb_er_bal, cb_er_cont,
-                cb_vesting, r,
-                yos_arr, sep_type_arr, sep, dr_arr, expected_icr,
-                surv_icr_arr, ann_acr_arr, ann_adj_arr,
+                cb_ee_bal_all[start:stop],
+                cb_ee_cont_all[start:stop],
+                cb_er_bal_all[start:stop],
+                cb_er_cont_all[start:stop],
+                cb_vesting,
+                r,
+                yos_arr_all[start:stop],
+                sep_type_all[start:stop],
+                sep,
+                dr_arr,
+                expected_icr,
+                surv_icr_all[start:stop],
+                ann_acr_all[start:stop],
+                ann_adj_all[start:stop],
             )
             nc_rate_cb = pvfb_cb[0] / pvfs[0] if pvfs[0] > 0 else 0.0
-            g["pvfb_cb_at_current_age"] = pvfb_cb
-            g["indv_norm_cost_cb"] = nc_rate_cb
-            g["pvfnc_cb"] = nc_rate_cb * pvfs
+            pvfb_cb_current[start:stop] = pvfb_cb
+            indv_norm_cost_cb[start:stop] = nc_rate_cb
+            pvfnc_cb[start:stop] = nc_rate_cb * pvfs
 
-        return g
+    sbt["pvfb_db_wealth_at_current_age"] = pvfb_db_current
+    sbt["pvfs_at_current_age"] = pvfs_current
+    sbt["indv_norm_cost"] = indv_norm_cost
+    sbt["pvfnc_db"] = pvfnc_db
 
-    result_parts = []
-    for _, g in sbt.groupby(["class_name", "entry_year", "entry_age"]):
-        result_parts.append(_compute_pv(g))
-    return pd.concat(result_parts, ignore_index=True)
+    if has_cb:
+        sbt["pvfb_cb_at_current_age"] = pvfb_cb_current
+        sbt["indv_norm_cost_cb"] = indv_norm_cost_cb
+        sbt["pvfnc_cb"] = pvfnc_cb
+
+    return sbt

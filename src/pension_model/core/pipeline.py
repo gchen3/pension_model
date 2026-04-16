@@ -15,12 +15,16 @@ Pipeline:
 """
 
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import numpy as np
 import pandas as pd
 
 from pension_model.config_schema import PlanConfig
 from pension_model.core.benefit_tables import (
+    _resolve_sep_type_vec,
     build_salary_headcount_table,
     build_entrant_profile,
     build_salary_benefit_table,
@@ -40,6 +44,44 @@ from pension_model.core.pipeline_projected import (
     compute_retire_liability,
     compute_term_liability,
 )
+
+
+@dataclass(frozen=True)
+class PreparedPlanRun:
+    """Prepared liability runtime state for a plan.
+
+    This makes the core stage boundary explicit: configuration and input
+    loading happen once, plan-wide benefit tables are built once, and the
+    resulting prepared state can be reused by liability and funding callers.
+    """
+
+    constants: PlanConfig
+    inputs_by_class: dict
+    retained_plan_tables: Optional[dict]
+    table_row_counts: dict[str, int]
+    runtime_tables_by_class: dict
+    stage_timings: dict[str, float]
+
+    @property
+    def plan_tables(self) -> Optional[dict]:
+        """Backward-compatible alias for retained stacked plan tables."""
+        return self.retained_plan_tables
+
+    @property
+    def plan_table_rows(self) -> dict[str, int]:
+        """Backward-compatible alias for plan-wide table row counts."""
+        return self.table_row_counts
+
+    @property
+    def class_tables_by_name(self) -> dict:
+        """Backward-compatible alias for per-class runtime tables."""
+        return self.runtime_tables_by_class
+
+
+def _mark_stage(stage_timings: dict[str, float], stage_name: str, started_at: float) -> float:
+    """Record elapsed time for a stage and return a fresh timer start."""
+    stage_timings[stage_name] = time.perf_counter() - started_at
+    return time.perf_counter()
 
 
 def compute_adjustment_ratio(class_or_inputs, headcount: pd.DataFrame | None = None,
@@ -171,6 +213,47 @@ def _cast_class_name_categories(frames: list[pd.DataFrame], classes: list[str]) 
         frame["class_name"] = frame["class_name"].astype(class_cat)
 
 
+def _trim_runtime_ann_factor_table(ann_factor: pd.DataFrame) -> pd.DataFrame:
+    """Keep only ann_factor columns needed after benefit-table construction."""
+    keep_cols = [
+        "class_name",
+        "entry_year",
+        "entry_age",
+        "dist_year",
+        "dist_age",
+        "yos",
+        "term_year",
+        "cum_mort_dr",
+        "ann_factor",
+    ]
+    for col in ["surv_icr", "ann_factor_acr"]:
+        if col in ann_factor.columns:
+            keep_cols.append(col)
+    return ann_factor[keep_cols].copy()
+
+
+def _build_benefit_decision_lookup(
+    benefit_val: pd.DataFrame,
+    final_benefit: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build the narrow workforce decision table from benefit results."""
+    bvt = benefit_val[["entry_year", "entry_age", "yos", "term_age", "ret_status"]].copy()
+    bvt["sep_type"] = _resolve_sep_type_vec(bvt["ret_status"].values)
+    bvt["ben_decision"] = bvt["sep_type"].map(
+        {"retire": "retire", "vested": "mix", "non_vested": "refund"}
+    )
+    bvt.loc[bvt["yos"] == 0, "ben_decision"] = np.nan
+
+    decisions = bvt.merge(
+        final_benefit[["entry_year", "entry_age", "term_age", "dist_age"]],
+        on=["entry_year", "entry_age", "term_age"],
+        how="left",
+    )
+    decisions["dist_age"] = decisions["dist_age"].fillna(decisions["term_age"]).astype(int)
+    decisions = decisions[decisions["ben_decision"].notna()].reset_index(drop=True)
+    return decisions[["entry_year", "entry_age", "yos", "term_age", "dist_age", "ben_decision"]]
+
+
 
 def build_plan_benefit_tables(
     inputs_by_class: dict,
@@ -247,13 +330,13 @@ def build_plan_benefit_tables(
     )
 
     # --- Stacked builders: one call each, spanning every class at once ---
-    ann_factor = build_ann_factor_table(
+    ann_factor_full = build_ann_factor_table(
         salary_benefit_table=salary_benefit,
         compact_mortality_by_class=cm_by_class,
         constants=constants,
         expected_icr_by_class=expected_icr_by_class or None,
     )
-    benefit = build_benefit_table(ann_factor, salary_benefit, constants)
+    benefit = build_benefit_table(ann_factor_full, salary_benefit, constants)
     final_benefit = build_final_benefit_table(
         benefit, use_earliest_retire=constants.use_earliest_retire,
     )
@@ -267,8 +350,9 @@ def build_plan_benefit_tables(
         scalar_icr = None
     benefit_val = build_benefit_val_table(
         salary_benefit, final_benefit, separation_rate, constants,
-        expected_icr=scalar_icr, ann_factor_table=ann_factor,
+        expected_icr=scalar_icr, ann_factor_table=ann_factor_full,
     )
+    ann_factor = _trim_runtime_ann_factor_table(ann_factor_full)
 
     return {
         "salary_headcount": salary_headcount,
@@ -365,23 +449,8 @@ def _project_and_aggregate_class(
     """
     from pension_model.core.workforce import project_workforce
 
-    from pension_model.core.benefit_tables import _resolve_sep_type_vec
-
     bvt = class_tables["benefit_val"]
-    fbt = class_tables["final_benefit"]
-    bvt_bd = bvt[["entry_year", "entry_age", "yos", "term_age",
-                  "ret_status"]].copy()
-    bvt_bd["sep_type"] = _resolve_sep_type_vec(bvt_bd["ret_status"].values)
-    bvt_bd["ben_decision"] = bvt_bd["sep_type"].map(
-        {"retire": "retire", "vested": "mix", "non_vested": "refund"})
-    bvt_bd.loc[bvt_bd["yos"] == 0, "ben_decision"] = np.nan
-    ben_decisions = bvt_bd.merge(
-        fbt[["entry_year", "entry_age", "term_age", "dist_age"]].drop_duplicates(),
-        on=["entry_year", "entry_age", "term_age"], how="left",
-    )
-    ben_decisions["dist_age"] = ben_decisions["dist_age"].fillna(
-        ben_decisions["term_age"]).astype(int)
-    ben_decisions = ben_decisions[ben_decisions["ben_decision"].notna()]
+    ben_decisions = class_tables["benefit_decision_lookup"]
 
     # Initial active population from this class's salary_headcount
     sh = class_tables["salary_headcount"]
@@ -407,12 +476,12 @@ def _project_and_aggregate_class(
     active = compute_active_liability(
         wf["wf_active"], class_tables["benefit_val"], class_name, constants)
     term = compute_term_liability(
-        wf["wf_term"], class_tables["benefit_val"], class_tables["benefit"],
+        wf["wf_term"], class_tables["benefit_val"], class_tables["term_discount_lookup"],
         class_name, constants)
     refund = compute_refund_liability(
-        wf["wf_refund"], class_tables["benefit"], class_name, constants)
+        wf["wf_refund"], class_tables["refund_lookup"], class_name, constants)
     retire = compute_retire_liability(
-        wf["wf_retire"], class_tables["benefit"], class_tables["ann_factor"],
+        wf["wf_retire"], class_tables["retire_benefit_lookup"], class_tables["retire_annuity_lookup"],
         class_name, constants)
 
     cd = constants.class_data[class_name]
@@ -470,6 +539,144 @@ def _split_plan_tables_by_class(plan_tables: dict, classes: list) -> dict:
     return result
 
 
+def _split_runtime_tables_by_class(plan_tables: dict, classes: list[str]) -> dict:
+    """Build per-class runtime tables without materializing full large-frame slices."""
+    runtime_tables = {cn: {} for cn in classes}
+
+    for name in ["salary_headcount", "entrant_profile", "separation_rate", "benefit_val"]:
+        slices = _split_plan_tables_by_class({name: plan_tables[name]}, classes)
+        for cn in classes:
+            runtime_tables[cn][name] = slices[cn][name]
+
+    final_benefit_slices = _split_plan_tables_by_class({"final_benefit": plan_tables["final_benefit"]}, classes)
+    for cn in classes:
+        runtime_tables[cn]["benefit_decision_lookup"] = _build_benefit_decision_lookup(
+            runtime_tables[cn]["benefit_val"],
+            final_benefit_slices[cn]["final_benefit"],
+        )
+
+    benefit = plan_tables["benefit"]
+    ann_factor = plan_tables["ann_factor"]
+
+    term_discount_cols = ["class_name", "entry_age", "entry_year", "dist_age", "dist_year", "term_year", "cum_mort_dr"]
+    refund_cols = ["class_name", "entry_age", "entry_year", "dist_age", "dist_year", "term_year", "db_ee_balance"]
+    if "cb_balance" in benefit.columns:
+        refund_cols.append("cb_balance")
+    retire_benefit_cols = ["class_name", "entry_age", "entry_year", "dist_year", "term_year", "db_benefit", "cola"]
+    if "cb_benefit" in benefit.columns:
+        retire_benefit_cols.append("cb_benefit")
+    annuity_cols = ["class_name", "entry_age", "entry_year", "dist_year", "term_year", "ann_factor"]
+
+    benefit_term_groups = dict(tuple(benefit[term_discount_cols].groupby("class_name", sort=False)))
+    benefit_refund_groups = dict(tuple(benefit[refund_cols].groupby("class_name", sort=False)))
+    benefit_retire_groups = dict(tuple(benefit[retire_benefit_cols].groupby("class_name", sort=False)))
+    annuity_groups = dict(tuple(ann_factor[annuity_cols].groupby("class_name", sort=False)))
+
+    for cn in classes:
+        runtime_tables[cn]["term_discount_lookup"] = (
+            benefit_term_groups[cn].drop(columns=["class_name"]).reset_index(drop=True)
+        )
+        runtime_tables[cn]["refund_lookup"] = (
+            benefit_refund_groups[cn].drop(columns=["class_name"]).reset_index(drop=True)
+        )
+        runtime_tables[cn]["retire_benefit_lookup"] = (
+            benefit_retire_groups[cn].drop(columns=["class_name"]).reset_index(drop=True)
+        )
+        runtime_tables[cn]["retire_annuity_lookup"] = (
+            annuity_groups[cn].drop(columns=["class_name"]).reset_index(drop=True)
+        )
+
+    return runtime_tables
+
+
+def prepare_plan_run(
+    constants: PlanConfig,
+    *,
+    retain_plan_tables: bool = False,
+    research_mode: bool = False,
+    on_stage=None,
+) -> PreparedPlanRun:
+    """Prepare reusable liability inputs and plan-wide benefit tables.
+
+    This is the explicit stage boundary for the liability runtime:
+    load plan inputs once, build plan-wide tables once, and expose both
+    the stacked and per-class table views for downstream callers.
+
+    ``research_mode`` is a clearer alias for retaining the full stacked
+    plan tables for debugging, inspection, and profiling work.
+    """
+    from pension_model.core.data_loader import load_plan_inputs
+
+    started_at = time.perf_counter()
+    stage_timings: dict[str, float] = {}
+
+    if on_stage:
+        on_stage("prepare")
+    constants, inputs_by_class = load_plan_inputs(constants)
+    started_at = _mark_stage(stage_timings, "load_inputs", started_at)
+
+    if on_stage:
+        on_stage("benefit_tables")
+    plan_tables = build_plan_benefit_tables(inputs_by_class, constants)
+    started_at = _mark_stage(stage_timings, "build_plan_benefit_tables", started_at)
+    plan_table_rows = {
+        name: len(df)
+        for name, df in plan_tables.items()
+        if hasattr(df, "__len__")
+    }
+
+    classes = list(constants.classes)
+    runtime_tables_by_class = _split_runtime_tables_by_class(plan_tables, classes)
+    _mark_stage(stage_timings, "split_plan_tables", started_at)
+
+    return PreparedPlanRun(
+        constants=constants,
+        inputs_by_class=inputs_by_class,
+        retained_plan_tables=plan_tables if (retain_plan_tables or research_mode) else None,
+        table_row_counts=plan_table_rows,
+        runtime_tables_by_class=runtime_tables_by_class,
+        stage_timings=stage_timings,
+    )
+
+
+def summarize_prepared_plan_run(prepared: PreparedPlanRun) -> dict:
+    """Return lightweight profiling metadata for a prepared plan run."""
+    return {
+        "stage_timings": dict(prepared.stage_timings),
+        "table_rows": dict(prepared.table_row_counts),
+        "retains_plan_tables": prepared.retained_plan_tables is not None,
+    }
+
+
+def run_prepared_plan_pipeline(
+    prepared: PreparedPlanRun,
+    *,
+    no_new_entrants: bool = False,
+    on_stage=None,
+    progress: bool = False,
+) -> dict:
+    """Run the liability pipeline from precomputed plan state."""
+    constants = prepared.constants
+    classes = list(constants.classes)
+
+    liability = {}
+    n = len(classes)
+    for i, cn in enumerate(classes):
+        if progress:
+            pct = int(i / n * 100)
+            sys.stdout.write(f"\r    {pct:3d}%")
+            sys.stdout.flush()
+        liability[cn] = _project_and_aggregate_class(
+            cn, prepared.runtime_tables_by_class[cn], prepared.inputs_by_class[cn], constants,
+            no_new_entrants=no_new_entrants, on_stage=on_stage,
+        )
+    if progress:
+        sys.stdout.write(f"\r    100% done\n")
+        sys.stdout.flush()
+
+    return liability
+
+
 def run_plan_pipeline(
     constants: PlanConfig,
     baseline_dir: Path = None,
@@ -480,52 +687,15 @@ def run_plan_pipeline(
 ) -> dict:
     """End-to-end pipeline for an entire plan: stage 3 data → per-class liability.
 
-    Loads inputs once per class, builds every benefit table in a single
-    plan-wide stacked call via build_plan_benefit_tables, then loops the
-    classes to project workforce and aggregate liabilities (which
-    currently still run per-class because project_workforce uses numpy
-    matrices sized per class).
-
-    Args:
-        constants: PlanConfig.
-        baseline_dir: Deprecated, ignored. Kept for caller compatibility.
-        no_new_entrants: Rundown mode — no new hires projected.
-        on_stage: Optional callback(stage_name: str) for progress reporting.
-        progress: If True, print percent-done progress to stdout.
-
-    Returns:
-        Dict {class_name: liability DataFrame} — one entry per class in
-        constants.classes, matching the old run_class_pipeline_e2e output
-        shape per class.
+    This wrapper preserves the historical public entry point while routing
+    through the explicit prepare-stage API.
     """
-    from pension_model.core.data_loader import load_plan_inputs
-
-    classes = list(constants.classes)
-
-    # Load raw inputs for all classes; attaches reduction tables to config
-    constants, inputs_by_class = load_plan_inputs(constants)
-
+    prepared = prepare_plan_run(constants, on_stage=on_stage)
     if on_stage:
-        on_stage("benefit_tables")
-    plan_tables = build_plan_benefit_tables(inputs_by_class, constants)
-
-    # Split stacked tables into per-class views once (single groupby pass
-    # per frame) instead of re-scanning inside the per-class loop.
-    class_tables_by_name = _split_plan_tables_by_class(plan_tables, classes)
-
-    liability = {}
-    n = len(classes)
-    for i, cn in enumerate(classes):
-        if progress:
-            pct = int(i / n * 100)
-            sys.stdout.write(f"\r    {pct:3d}%")
-            sys.stdout.flush()
-        liability[cn] = _project_and_aggregate_class(
-            cn, class_tables_by_name[cn], inputs_by_class[cn], constants,
-            no_new_entrants=no_new_entrants, on_stage=on_stage,
-        )
-    if progress:
-        sys.stdout.write(f"\r    100% done\n")
-        sys.stdout.flush()
-
-    return liability
+        on_stage("liability")
+    return run_prepared_plan_pipeline(
+        prepared,
+        no_new_entrants=no_new_entrants,
+        on_stage=on_stage,
+        progress=progress,
+    )
