@@ -72,3 +72,28 @@ def test_benefit_rows_stay_contiguous_and_ordered(prepared_plan_tables):
     assert bool(dist_age_monotone.all()), (
         f"{plan_name}: dist_age must stay monotone within each benefit cohort"
     )
+
+
+def test_ann_factor_term_rows_align_with_salary_benefit(prepared_plan_tables):
+    plan_name, plan_tables = prepared_plan_tables
+    salary_benefit = plan_tables["salary_benefit"]
+    ann_factor = plan_tables["ann_factor"]
+
+    max_dist_age = int(ann_factor["dist_age"].max())
+    sbt_keys = salary_benefit.loc[
+        salary_benefit["term_age"] <= max_dist_age,
+        ["class_name", "entry_year", "entry_age", "yos", "term_age"],
+    ].reset_index(drop=True)
+
+    ann_term_keys = ann_factor.loc[
+        ann_factor["dist_age"] == ann_factor["entry_age"] + ann_factor["yos"],
+        ["class_name", "entry_year", "entry_age", "yos"],
+    ].reset_index(drop=True)
+    ann_term_keys["term_age"] = ann_term_keys["entry_age"] + ann_term_keys["yos"]
+
+    assert len(ann_term_keys) == len(sbt_keys), (
+        f"{plan_name}: ann_factor term rows must match eligible salary_benefit rows"
+    )
+    assert ann_term_keys.equals(sbt_keys), (
+        f"{plan_name}: ann_factor term rows must stay aligned with salary_benefit order"
+    )

@@ -882,12 +882,62 @@ def build_benefit_table(
     if has_cb:
         sbt_cols.extend(["cb_balance", "cb_ee_balance", "cb_er_balance",
                          "cb_ee_cont", "cb_er_cont"])
-    # ``salary_benefit_table`` is already unique on the join key.
-    df = df.merge(
-        salary_benefit_table[sbt_cols],
-        on=["class_name", "entry_year", "entry_age", "yos", "term_age"],
-        how="left",
+    sbt_values = sbt_cols[5:]
+    sbt_filtered = salary_benefit_table.loc[
+        salary_benefit_table["term_age"] <= constants.ranges.max_age,
+        sbt_cols,
+    ].reset_index(drop=True)
+
+    # Fast path: build_ann_factor_table() preserves salary_benefit cohort order
+    # and expands each eligible cohort into a contiguous dist_age block. When
+    # that contract holds, we can attach salary/FAS data by repeated row take
+    # instead of a 7M-row merge. Fall back to the merge if the contract is not
+    # met so the function remains correct for plausible future callers.
+    term_row_mask = (
+        df["dist_age"].to_numpy(dtype=np.int64, copy=False)
+        == df["term_age"].to_numpy(dtype=np.int64, copy=False)
     )
+    ann_term = df.loc[term_row_mask, ["class_name", "entry_year", "entry_age", "yos", "term_age"]]
+
+    aligned = len(ann_term) == len(sbt_filtered)
+    if aligned:
+        aligned = np.array_equal(
+            ann_term["entry_year"].to_numpy(dtype=np.int64, copy=False),
+            sbt_filtered["entry_year"].to_numpy(dtype=np.int64, copy=False),
+        )
+    if aligned:
+        aligned = np.array_equal(
+            ann_term["entry_age"].to_numpy(dtype=np.int64, copy=False),
+            sbt_filtered["entry_age"].to_numpy(dtype=np.int64, copy=False),
+        )
+    if aligned:
+        aligned = np.array_equal(
+            ann_term["yos"].to_numpy(dtype=np.int64, copy=False),
+            sbt_filtered["yos"].to_numpy(dtype=np.int64, copy=False),
+        )
+    if aligned:
+        aligned = np.array_equal(
+            ann_term["term_age"].to_numpy(dtype=np.int64, copy=False),
+            sbt_filtered["term_age"].to_numpy(dtype=np.int64, copy=False),
+        )
+    if aligned:
+        aligned = np.array_equal(
+            ann_term["class_name"].astype(object).to_numpy(),
+            sbt_filtered["class_name"].astype(object).to_numpy(),
+        )
+
+    if aligned:
+        repeat_counts = constants.ranges.max_age - sbt_filtered["term_age"].to_numpy(dtype=np.int64, copy=False) + 1
+        lookup_index = np.repeat(np.arange(len(sbt_filtered), dtype=np.int64), repeat_counts)
+        for col in sbt_values:
+            df[col] = sbt_filtered[col].to_numpy(copy=False)[lookup_index]
+    else:
+        # ``salary_benefit_table`` is already unique on the join key.
+        df = df.merge(
+            sbt_filtered,
+            on=["class_name", "entry_year", "entry_age", "yos", "term_age"],
+            how="left",
+        )
 
     # Vectorized benefit multiplier and reduction factor (integer tier/status)
     df["ben_mult"] = resolve_ben_mult_vec(
