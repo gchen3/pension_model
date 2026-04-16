@@ -58,6 +58,9 @@ src/
 plans/                        Per-plan config and data (not a Python package)
   frs/                        Florida Retirement System
   txtrs/                      Texas Teachers Retirement System
+R_model/                      Local legacy reference R models used for comparison
+  R_model_frs/                FRS reference model workspace
+  R_model_txtrs/              TXTRS reference model workspace
 scenarios/                    Scenario override files (JSON)
 tests/                        Test suite
 docs/                         Documentation
@@ -67,6 +70,12 @@ docs/                         Documentation
 centered on canonical runtime inputs under `plans/{plan}/`; extracting those
 inputs from source PDFs or workbooks is upstream prep work, not part of the
 runtime architecture.
+
+The repository also currently includes local copies of the legacy reference R
+models under `R_model/R_model_frs/` and `R_model/R_model_txtrs/`. Those
+directories are developer reference material for tracing legacy behavior and
+checking R-side actuarial logic when needed; they are not part of the Python
+runtime boundary.
 
 ### Pipeline Data Flow
 
