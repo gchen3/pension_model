@@ -53,6 +53,9 @@ def _load_retiree_distribution(path: Path) -> pd.DataFrame:
 def load_plan_data(
     class_name: str,
     constants: PlanConfig,
+    *,
+    mortality_cache: dict | None = None,
+    ann_factor_retire_cache: dict | None = None,
 ) -> dict:
     """Load stage 3 data for a plan class.
 
@@ -97,12 +100,32 @@ def load_plan_data(
         inputs["_entrant_profile"] = ep
 
     # --- Mortality (stage 3 CSV) ---
-    cm = _build_mortality_from_csv(constants, mort_dir, class_name)
-    from pension_model.core.mortality_builder import build_ann_factor_retire_table
-    afr = build_ann_factor_retire_table(
-        cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
-        constants.economic.dr_current, constants.benefit.cola_current_retire,
+    cm = _build_mortality_from_csv(
+        constants,
+        mort_dir,
+        class_name,
+        cache=mortality_cache,
     )
+    from pension_model.core.mortality_builder import build_ann_factor_retire_table
+    ann_factor_key = None
+    if ann_factor_retire_cache is not None:
+        ann_factor_key = (
+            _get_mortality_cache_key(constants, mort_dir, class_name),
+            constants.ranges.start_year,
+            constants.ranges.model_period,
+            constants.economic.dr_current,
+            constants.benefit.cola_current_retire,
+        )
+        afr = ann_factor_retire_cache.get(ann_factor_key)
+    else:
+        afr = None
+    if afr is None:
+        afr = build_ann_factor_retire_table(
+            cm, class_name, constants.ranges.start_year, constants.ranges.model_period,
+            constants.economic.dr_current, constants.benefit.cola_current_retire,
+        )
+        if ann_factor_retire_cache is not None:
+            ann_factor_retire_cache[ann_factor_key] = afr
     inputs["ann_factor_retire"] = afr
     inputs["_compact_mortality"] = cm
 
@@ -112,26 +135,17 @@ def load_plan_data(
     return inputs
 
 
-def _build_mortality_from_csv(
+def _get_mortality_cache_key(
     constants: PlanConfig,
     mort_dir: Path,
     class_name: str,
-) -> "CompactMortality":
-    """Build CompactMortality from stage 3 CSV files."""
-    from pension_model.core.mortality_builder import build_compact_mortality_from_csv
-
-    base_path = mort_dir / "base_rates.csv"
-    imp_path = mort_dir / "improvement_scale.csv"
-
-    # Determine table name from config: per-class map takes precedence
-    # (for multi-class plans with different base tables). Otherwise fall back
-    # to the plan-wide mortality.base_table setting (single-table plans).
+) -> tuple:
+    """Return the cache key for one class's resolved mortality inputs."""
     base_table_map = constants.base_table_map
     if class_name in base_table_map:
         table_name = base_table_map[class_name]
     else:
         base_table_label = constants.mortality_base_table
-        # Map verbose config labels to CSV table names
         table_name_map = {
             "pub_2010_teacher_below_median": "teacher_below_median",
             "pub_2010_teacher": "teacher",
@@ -140,12 +154,37 @@ def _build_mortality_from_csv(
         }
         table_name = table_name_map.get(base_table_label, base_table_label)
 
+    return (
+        mort_dir / "base_rates.csv",
+        mort_dir / "improvement_scale.csv",
+        table_name,
+        constants.ranges.min_age,
+        constants.max_age,
+        constants.ranges.start_year + constants.ranges.model_period
+        + constants.max_age - constants.ranges.min_age,
+        constants.male_mp_forward_shift,
+    )
+
+
+def _build_mortality_from_csv(
+    constants: PlanConfig,
+    mort_dir: Path,
+    class_name: str,
+    *,
+    cache: dict | None = None,
+) -> "CompactMortality":
+    """Build CompactMortality from stage 3 CSV files."""
+    from pension_model.core.mortality_builder import build_compact_mortality_from_csv
+
+    cache_key = _get_mortality_cache_key(constants, mort_dir, class_name)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    base_path, imp_path, table_name, _, _, max_year, mp_shift = cache_key
     mp_shift = constants.male_mp_forward_shift
     max_age = constants.max_age
-    max_year = (constants.ranges.start_year + constants.ranges.model_period
-                + max_age - constants.ranges.min_age)
 
-    return build_compact_mortality_from_csv(
+    cm = build_compact_mortality_from_csv(
         base_path, imp_path,
         class_name, table_name=table_name,
         min_age=constants.ranges.min_age,
@@ -154,6 +193,9 @@ def _build_mortality_from_csv(
         constants=constants,
         male_mp_forward_shift=mp_shift,
     )
+    if cache is not None:
+        cache[cache_key] = cm
+    return cm
 
 
 def _load_decrements(
@@ -436,9 +478,16 @@ def load_plan_inputs(constants: PlanConfig) -> tuple[PlanConfig, dict]:
     classes = list(constants.classes)
 
     raw_inputs_by_class: dict = {}
+    mortality_cache: dict = {}
+    ann_factor_retire_cache: dict = {}
 
     for cn in classes:
-        inputs = load_plan_data(cn, constants)
+        inputs = load_plan_data(
+            cn,
+            constants,
+            mortality_cache=mortality_cache,
+            ann_factor_retire_cache=ann_factor_retire_cache,
+        )
         inputs["_raw_headcount_total"] = float(inputs["headcount"]["count"].sum())
         raw_inputs_by_class[cn] = inputs
 

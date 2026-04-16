@@ -85,13 +85,10 @@ def project_workforce(
         sep_lookup[ea_idx[valid], ta_idx[valid], yr_idx[valid]] = sr_clean[valid]
 
     # Build benefit decision lookups as numpy-indexed arrays.
-    # refund_lookup: 3D [entry_age_idx, age_idx, year_idx] -> refund probability
-    # retire_lookup: 4D [entry_age_idx, age_idx, dist_age_idx, year_idx] -> 1.0
-    # Using dicts with tuple keys is the bottleneck-free approach here because
-    # the inner-year loops (steps 6-7) do sparse lookups; a dense 4D array would
-    # be too large. But we build the dicts from vectorized column ops, not iterrows.
-    refund_lookup = {}
-    retire_lookup = {}
+    # refund_prob_arr[entry_age_idx, term_age_idx, term_year_idx] -> refund probability
+    # retire_prob_arr[term_year_idx, entry_age_idx, dist_age_idx, dist_year_idx] -> retire probability
+    refund_prob_arr = np.zeros((n_entry, n_ages, n_years))
+    retire_prob_arr = np.zeros((n_years, n_entry, n_ages, n_years))
 
     if len(benefit_decisions) > 0:
         bd = benefit_decisions
@@ -102,18 +99,50 @@ def project_workforce(
         bd_da = bd["dist_age"].values.astype(int) if "dist_age" in bd.columns else bd_ta
         bd_dec = bd["ben_decision"].values
         bd_yos = bd["yos"].values.astype(int) if "yos" in bd.columns else (bd_ta - bd_ea)
+        bd_ei = np.array([ea_to_idx.get(int(v), -1) for v in bd_ea])
+        bd_ta_idx = bd_ta - min_age
+        bd_da_idx = bd_da - min_age
+        bd_ty_idx = bd_ey + (bd_ta - bd_ea) - start_year
+        bd_dy_idx = bd_ey + (bd_da - bd_ea) - start_year
 
         is_refund = (bd_dec == "refund") | ((pd.isna(bd_dec)) & (bd_yos == 0))
         is_mix = bd_dec == "mix"
         is_retire = bd_dec == "retire"
 
-        for i in np.where(is_refund)[0]:
-            refund_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]))] = 1.0
-        for i in np.where(is_mix)[0]:
-            refund_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]))] = 1 - retire_refund_ratio
-            retire_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]), int(bd_da[i]))] = 1.0
-        for i in np.where(is_retire)[0]:
-            retire_lookup[(int(bd_ey[i]), int(bd_ea[i]), int(bd_ta[i]), int(bd_da[i]))] = 1.0
+        valid_refund = (
+            (bd_ei >= 0)
+            & (bd_ta_idx >= 0)
+            & (bd_ta_idx < n_ages)
+            & (bd_ty_idx >= 0)
+            & (bd_ty_idx < n_years)
+        )
+        refund_prob_arr[
+            bd_ei[valid_refund & is_refund],
+            bd_ta_idx[valid_refund & is_refund],
+            bd_ty_idx[valid_refund & is_refund],
+        ] = 1.0
+        refund_prob_arr[
+            bd_ei[valid_refund & is_mix],
+            bd_ta_idx[valid_refund & is_mix],
+            bd_ty_idx[valid_refund & is_mix],
+        ] = 1 - retire_refund_ratio
+
+        valid_retire = (
+            (bd_ei >= 0)
+            & (bd_da_idx >= 0)
+            & (bd_da_idx < n_ages)
+            & (bd_ty_idx >= 0)
+            & (bd_ty_idx < n_years)
+            & (bd_dy_idx >= 0)
+            & (bd_dy_idx < n_years)
+        )
+        retire_mask = valid_retire & (is_mix | is_retire)
+        retire_prob_arr[
+            bd_ty_idx[retire_mask],
+            bd_ei[retire_mask],
+            bd_da_idx[retire_mask],
+            bd_dy_idx[retire_mask],
+        ] = 1.0
 
     # Transition matrix: shifts ages right by 1
     TM = np.zeros((n_ages, n_ages))
@@ -171,17 +200,6 @@ def project_workforce(
             out_hi = a_hi + mort_age_offset - min_age
             emp_surv_by_year[out_lo:out_hi, t] = 1.0 - emp_mort_full[a_lo:a_hi, yr_idx]
             ret_surv_by_year[out_lo:out_hi, t] = 1.0 - ret_mort_full[a_lo:a_hi, yr_idx]
-
-    # --- Pre-build refund probability array ---
-    # refund_prob_arr[entry_age_idx, age_idx, year_idx]
-    # For new terms at (year, entry_age, term_age=age), gives refund prob.
-    refund_prob_arr = np.zeros((n_entry, n_ages, n_years))
-    for (ey, ea, ta), rp in refund_lookup.items():
-        ea_i = ea_to_idx.get(ea, -1)
-        ta_i = ta - min_age
-        yr_i = ey + (ta - ea) - start_year
-        if ea_i >= 0 and 0 <= ta_i < n_ages and 0 <= yr_i < n_years:
-            refund_prob_arr[ea_i, ta_i, yr_i] = rp
 
     # --- Tier-aware mortality helper for term stocks ---
     # Deferred vested members use employee mortality until they reach a
@@ -333,18 +351,8 @@ def project_workforce(
             if len(nz_ei) == 0:
                 continue
 
-            nz_age = nz_ai + min_age
-            nz_ea = ea_arr_int[nz_ei]
-            orig_ta = nz_age - (year - ty)
-            entry_year_member = year - (nz_age - nz_ea)
-
-            # Look up retire probabilities for nonzero cells
-            ret_probs = np.array([
-                retire_lookup.get(
-                    (int(entry_year_member[k]), int(nz_ea[k]),
-                     int(orig_ta[k]), int(nz_age[k])), 0)
-                for k in range(len(nz_ei))
-            ])
+            ty_idx = ty - start_year
+            ret_probs = retire_prob_arr[ty_idx, nz_ei, nz_ai, t]
 
             has_ret = ret_probs > 0
             if not has_ret.any():

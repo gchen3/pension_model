@@ -302,8 +302,10 @@ def _accumulate_to_aggregate(target, source, i, cols):
     write, because that can dtype-promote and produce different bytes
     (bit-identity risk #9 in the plan).
     """
+    target_at = target.at
+    source_at = source.at
     for col in cols:
-        target.loc[i, col] += source.loc[i, col]
+        target_at[i, col] = target_at[i, col] + source_at[i, col]
 
 
 def _maybe_accumulate(ctx, target, source, i, cols):
