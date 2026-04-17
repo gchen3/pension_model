@@ -230,6 +230,62 @@ Conclusion:
   manual spreadsheet prep or missing R-side code that is not currently in the
   repo
 
+### Attempt 6: Compare the remaining `special` and `admin` gaps as class-scaled uplifts
+
+Status:
+
+- `partial`
+
+Source families used:
+
+- ACFR `Total Annual Benefits by System/Class`
+- valuation and ACFR annuitant counts
+- ACFR plan-provisions narrative on disability and survivor benefits
+
+Tested comparison:
+
+- start from the mixed payout composite in Attempt 4
+- look only at the remaining unexplained gaps for:
+  - `special`
+  - `admin`
+- scale those gaps by class size and by class annual benefits
+
+Results:
+
+- special:
+  - remaining unexplained gap = `203,805,512`
+  - 2022 annuitant count = `43,523`
+  - gap per annuitant ≈ `$4,683`
+  - gap as share of 2022 ACFR class annual benefits ≈ `9.53%`
+- admin:
+  - remaining unexplained gap = `787,401`
+  - 2022 annuitant count = `165`
+  - gap per annuitant ≈ `$4,772`
+  - gap as share of 2022 ACFR class annual benefits ≈ `10.81%`
+
+Interpretation:
+
+- the two remaining unexplained gaps are surprisingly similar on a
+  per-annuitant basis
+- that supports a common Special Risk-family uplift rather than two unrelated
+  residuals
+
+Supporting policy clue:
+
+- the ACFR plan-provisions narrative states that Special Risk in-line-of-duty
+  disability retirement has a minimum Option 1 benefit of `65%` of average
+  final compensation, versus `42%` for other classes
+- the same narrative also describes richer line-of-duty death benefits for
+  Special Risk members
+
+Conclusion:
+
+- this is not a solved reconstruction rule
+- but it is a meaningful clue that the remaining `special` and `admin`
+  differences may reflect a common special-risk-specific benefit enhancement
+  that is not separately published in the class annual-benefit tables used so
+  far
+
 ## Current Working Conclusion
 
 The evidence now supports the following interpretation:
@@ -245,6 +301,8 @@ The evidence now supports the following interpretation:
   classes
 - the retained workbook evidence is now close to exhausted for this question:
   the constants are present only at the point where they are consumed
+- the remaining `special` and `admin` gaps now look more like a shared
+  Special-Risk-family uplift than random residual noise
 
 ## Open Follow-Up
 

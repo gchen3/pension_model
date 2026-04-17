@@ -195,6 +195,33 @@ Implication:
 - but the composite rule is not uniform enough yet to claim a full
   reconstruction
 
+One additional clue now stands out:
+
+- the still-unexplained `special` and `admin` gaps are very similar when scaled
+  by class size
+- using 2022 annuitant counts:
+  - special unexplained gap per annuitant is about `$4,683`
+  - admin unexplained gap per annuitant is about `$4,772`
+- using 2022 ACFR class annual benefits:
+  - special unexplained gap is about `9.53%`
+  - admin unexplained gap is about `10.81%`
+
+That pattern suggests a common class-specific uplift for the Special Risk family
+rather than two unrelated mismatches.
+
+The ACFR plan-provisions narrative makes that plausible:
+
+- it explicitly says Special Risk in-line-of-duty disability retirement has a
+  minimum Option 1 benefit of `65%` of average final compensation, versus `42%`
+  for other classes
+- it also describes richer line-of-duty death benefits for Special Risk members
+
+This does not solve the allocation, because the ACFR does not publish those
+special-risk-only benefit slices by class in a way that ties directly to the
+baseline outflow constants. But it does provide a credible policy-level reason
+why `special` and `admin` would share a common upward adjustment relative to a
+simple current-annuitant-plus-DROP composite.
+
 The workbook evidence sharpens that conclusion:
 
 - the plan-wide row-10 values are source-direct and match the ACFR deductions
