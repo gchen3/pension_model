@@ -78,6 +78,7 @@ The following are treated as settled for planning purposes:
 - For FRS and TXTRS, source selection should prioritize the document vintages used by the reviewed R-model baselines, not necessarily the latest available reports.
 - For new plans, source selection should generally start with the latest available official documents unless there is a specific reason to use an older vintage.
 - Within a plan, the actuarial valuation should generally be treated as the authoritative source, but ACFRs and related accounting documents may help fill gaps when used carefully and explicitly.
+- For new plans, prep should adhere to actuarial-valuation treatment as much as possible. If a prep rule departs from AV treatment, the departure should be explicit, justified, and documented as a modeling or estimation choice rather than treated as if it were source-direct.
 - Similar concepts reported in AVs and ACFRs may legitimately differ because of scope, terminology, accounting rules, actuarial rules, or measurement date differences.
 - The job of prep is to build consistent model input data from inconsistent and idiosyncratic source reporting.
 

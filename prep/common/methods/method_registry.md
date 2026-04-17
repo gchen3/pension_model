@@ -178,6 +178,8 @@ Recommended method statuses:
     path is the best conceptual choice for new plans
   - should not be promoted to a default forward-looking method without plan-
     specific review
+  - for new plans, AV treatment should be preferred even if the legacy FRS path
+    is never fully explained
 
 ### `eoc-payroll-subclass-allocation-v1`
 

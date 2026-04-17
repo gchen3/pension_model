@@ -169,7 +169,7 @@ as a deliberate shared estimation method, not an ad hoc convenience.
 
 ### 11. First-year observed cash flows may be broader than the model's later-year benefit concept
 
-FRS exposed an important pattern that is likely to recur.
+FRS exposed an important pilot pattern and prep risk.
 
 The initial observed year may be anchored to:
 
@@ -192,6 +192,15 @@ Implications:
 This is not just a plan-specific FRS detail. It is a general prep risk whenever
 the best class-level source is a valuation funding table rather than a direct
 benefit-payment table.
+
+This is a descriptive lesson, not a default design recommendation.
+
+For new plans, the preferred rule should still be:
+
+- adhere to AV treatment as much as possible
+- treat broader first-year disbursement proxies as exceptions that require
+  explicit justification and documentation
+- do not reuse a legacy proxy method just because it existed in an older model
 
 ### 12. Mortality gaps can combine missing source tables with ambiguous implementation rules
 
