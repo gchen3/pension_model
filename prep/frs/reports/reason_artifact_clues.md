@@ -154,6 +154,23 @@ One small discrepancy is visible:
 
 So the workbook is evidence, but not necessarily the final reviewed value.
 
+Additional narrowing result from a workbook-wide scan:
+
+- each class outflow constant appears only in the `Funding Input` formulas
+  `BL2:BR9`
+- the retained workbook does not contain those values anywhere else as
+  standalone inputs, helper cells, or derived references
+- the companion workbook
+  [Florida FRS COLA analysis.xlsx](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_frs/Florida%20FRS%20COLA%20analysis.xlsx)
+  does not contain those constants either
+
+This matters because it sharply narrows the retained-evidence boundary:
+
+- the workbook explains how the constants were used downstream
+- but the workbook does not explain how they were originally constructed
+- so the upstream provenance gap is now more clearly a pre-workbook or
+  off-workbook legacy step
+
 ### 4. Workbook `ben_payment_legacy` does not exactly match the current reviewed runtime
 
 The workbook formula pattern is:

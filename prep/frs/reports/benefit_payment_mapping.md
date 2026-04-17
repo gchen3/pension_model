@@ -159,10 +159,50 @@ annuities:
 This pattern strongly suggests that the baseline class outflows are a legacy
 intermediate allocation, not a direct copy of one published table.
 
+### Comparison to a mixed published-payout composite
+
+A more refined test combines:
+
+- valuation Table C-5 current annuitant annual benefits
+- ACFR disability benefits by class
+- ACFR terminated DROP current benefits by class
+
+This is not a full explanation, but it is more informative than any one-table
+comparison.
+
+Results:
+
+- Regular becomes very close:
+  - composite = `8,936,653,394`
+  - baseline outflow = `8,967,096,000`
+  - difference = `+30,442,606` (`+0.34%`)
+- Senior Management also becomes close:
+  - composite = `335,421,494`
+  - baseline outflow = `338,664,000`
+  - difference = `+3,242,506` (`+0.97%`)
+- Grouped EOC is already close to valuation current-annuitant benefits alone:
+  - valuation current annuitants = `169,201,000`
+  - baseline grouped outflow = `168,812,000`
+  - difference = `-389,000` (`-0.23%`)
+- Special and Admin remain materially underexplained even after the composite:
+  - Special difference = `+203,805,512`
+  - Admin difference = `+787,401`
+
+Implication:
+
+- the legacy outflow constants look more like a class-specific composite of
+  published payout slices than a copy of any single published source table
+- but the composite rule is not uniform enough yet to claim a full
+  reconstruction
+
 The workbook evidence sharpens that conclusion:
 
 - the plan-wide row-10 values are source-direct and match the ACFR deductions
   table exactly
+- the class outflow constants appear only as hard-coded literals in workbook
+  `Funding Input!BL2:BR9`
+- those constants do not appear elsewhere in the retained FRS workbook as
+  helper inputs or derived references
 - the unresolved part is now much narrower: where the class outflow constants
   themselves came from before being multiplied through that row-10 block
 

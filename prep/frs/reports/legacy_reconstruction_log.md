@@ -137,6 +137,99 @@ Conclusion:
 - valuation annuitant-benefit totals are also not a direct exact source for the
   baseline class outflows
 
+### Attempt 4: Baseline class outflows equal a composite of published payout slices
+
+Status:
+
+- `partial`
+
+Source families used:
+
+- valuation Table C-5 current annuitant annual benefits
+- ACFR disability benefits by class
+- ACFR terminated DROP participants by class using `count * average annual current benefit`
+
+Tested composite:
+
+- `current annuitant annual benefits`
+- plus `disability annual benefits`
+- plus `terminated DROP current benefits`
+
+Examples:
+
+- regular:
+  - valuation current annuitants = `8,552,985,000`
+  - ACFR disability benefits = `191,018,512`
+  - terminated DROP current benefits = `192,649,882`
+  - composite = `8,936,653,394`
+  - baseline outflow = `8,967,096,000`
+  - difference = `+30,442,606` (`+0.34%`)
+- senior management:
+  - composite = `335,421,494`
+  - baseline outflow = `338,664,000`
+  - difference = `+3,242,506` (`+0.97%`)
+- special:
+  - composite = `2,219,664,488`
+  - baseline outflow = `2,423,470,000`
+  - difference = `+203,805,512` (`+9.18%`)
+- admin:
+  - composite = `7,302,599`
+  - baseline outflow = `8,090,000`
+  - difference = `+787,401` (`+10.78%`)
+- grouped EOC:
+  - valuation current annuitants only = `169,201,000`
+  - baseline grouped outflow = `168,812,000`
+  - difference = `-389,000` (`-0.23%`)
+
+Conclusion:
+
+- the outflow constants appear to be closer to a mix of published payout slices
+  than to any single published table
+- this is strongest for `regular`, `senior management`, and grouped EOC
+- `special` and `admin` remain materially underexplained even after adding the
+  extra published payout components
+- this supports a `partially_reconstructed` interpretation rather than a solved
+  direct-source mapping
+
+### Attempt 5: Search retained Reason workbooks for a pre-formula origin of the class outflow constants
+
+Status:
+
+- `failed`
+
+Source families used:
+
+- [Florida FRS inputs.xlsx](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_frs/Florida%20FRS%20inputs.xlsx)
+- [Florida FRS COLA analysis.xlsx](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_frs/Florida%20FRS%20COLA%20analysis.xlsx)
+
+Tested search:
+
+- workbook-wide scan for literals:
+  - `8,967,096,000`
+  - `2,423,470,000`
+  - `8,090,000`
+  - `53,526,000`
+  - `9,442,000`
+  - `105,844,000`
+  - `338,864,000`
+  - `857,600,000`
+
+Result:
+
+- every hit is in `Funding Input!BL2:BR9`
+- no retained workbook cell was found that derives or documents those values
+  upstream
+- the companion `Florida FRS COLA analysis.xlsx` workbook contains none of
+  those constants
+
+Conclusion:
+
+- the retained workbooks explain how the class outflow constants were used
+- they do not explain how those constants were first constructed
+- this pushes the unresolved step earlier in the legacy workflow, possibly to
+  manual spreadsheet prep or missing R-side code that is not currently in the
+  repo
+
 ## Current Working Conclusion
 
 The evidence now supports the following interpretation:
@@ -147,6 +240,11 @@ The evidence now supports the following interpretation:
   the Reason/R workflow
 - no single published source table tested so far reproduces those outflows
   exactly
+- some class outflows are partially explainable as composites of multiple
+  published payout slices, but the composite rule is not yet stable across
+  classes
+- the retained workbook evidence is now close to exhausted for this question:
+  the constants are present only at the point where they are consumed
 
 ## Open Follow-Up
 
