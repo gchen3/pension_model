@@ -22,6 +22,8 @@ For new plans, the preferred standard is still:
 
 - adhere to AV treatment as much as possible
 - treat any broader first-year proxy as an exception that must be justified
+- prefer a simpler first cut over premature complexity; add refinement in later
+  passes if needed
 
 ## Plan And Source Context
 
@@ -144,4 +146,3 @@ Decision notes:
 - funding mapping note:
 - benefit-payment mapping note:
 - issue links:
-

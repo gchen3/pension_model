@@ -68,6 +68,7 @@ The following are treated as settled for planning purposes:
 - `discount rate` and `investment return assumption` are distinct concepts and must be documented precisely. They may have the same numeric value in a plan, but prep should not treat the terms as interchangeable.
 - New-plan prep should begin with a narrative analysis of the pension plan itself, based on the AV and other documents. See `New-Plan Narrative Analysis` below for the required scope and outputs.
 - New-plan prep must include a source sufficiency and gap report: what the AV and ACFR provide, what can be derived, and what remains missing.
+- New-plan integration should proceed in multiple cuts. Start with a simpler, AV-faithful representation that can produce a usable canonical input set, then add plan-specific detail in later passes as source support and model value justify it.
 - Provenance must be tracked for all data. In general, document plus page and/or table is enough. Cell-level lineage is not the default.
 - Provenance page citations must distinguish `printed page` from `PDF/electronic page`. Printed page should be the primary human-facing citation when available, and PDF page should also be recorded when practical.
 - Some required inputs may be judgmental, derived, or estimated rather than directly sourced.
@@ -165,6 +166,21 @@ In some plans, the right practical sequence will be:
 3. add structural detail over time as source support, validation evidence, and
    modeling value justify it
 4. reduce reliance on calibration as more plan-specific structure is modeled
+
+This should be treated as the default onboarding strategy for new plans:
+
+- first cut:
+  - represent the main plan structure
+  - capture the dominant member groups and benefit rules
+  - stay as close to AV treatment as possible
+  - produce the required canonical inputs in the form the runtime expects
+  - avoid premature complexity
+- later cuts:
+  - add secondary member groups, rare elections, finer class splits, and more
+    detailed source-driven structure where that detail materially improves the
+    model
+  - reduce reliance on broad proxies or calibration where the source support is
+    strong enough to do so
 
 So the prep record should distinguish between:
 

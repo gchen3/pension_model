@@ -47,6 +47,40 @@ Common cases:
 This argues for a prep architecture that treats `derived` as normal, not as an
 exception.
 
+### 2a. New-plan incorporation should happen in multiple cuts
+
+The pilots also support a practical onboarding rule for new plans:
+
+- start simple
+- get a clean first usable representation into the model
+- then add detail in later passes
+
+This is not just a project-management preference. It is a modeling discipline.
+
+Why:
+
+- pension-plan documentation is idiosyncratic
+- some plan features are material and easy to source, while others are small,
+  rare, or difficult to source cleanly
+- trying to model everything on the first pass increases the chance of mixing
+  weak evidence, silent assumptions, and unnecessary complexity
+
+So the default sequence for a new plan should be:
+
+1. first cut:
+   - represent the main plan structure
+   - capture the dominant member groups and benefit rules
+   - stay as close to AV treatment as possible
+   - produce a valid canonical input set in the required runtime form
+2. later cuts:
+   - add secondary groups, rarer elections, finer class splits, and more
+     detailed source-driven structure
+   - reduce reliance on calibration or broad proxies where stronger source
+     support becomes available
+
+This means some exclusions or simplifications are temporary by design, not
+signs that the omitted feature is unimportant forever.
+
 ### 3. Exact stage-3 reproduction is a strong and practical prep test
 
 For both pilots, the most useful working test has been:
