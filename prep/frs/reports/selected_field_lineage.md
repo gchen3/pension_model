@@ -74,3 +74,4 @@ See also:
 - [funding_mapping.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/funding_mapping.md)
 - [page_crosswalk.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/page_crosswalk.md)
 - [retiree_distribution_mapping.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/retiree_distribution_mapping.md)
+- [year0_cashflow_treatment.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/year0_cashflow_treatment.md)

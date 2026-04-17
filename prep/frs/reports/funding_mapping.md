@@ -133,6 +133,49 @@ Published 2022 plan-wide values match the aggregate funding row:
 
 These are system-level cash-flow anchors, not class-level source tables.
 
+## Year-0 Observed Cash-Flow Treatment
+
+The frozen baseline treats the initial year differently from later projected
+years.
+
+In `2022`, the frozen baseline uses explicit observed values for:
+
+- `total_ben_payment`
+- `total_refund`
+- `disbursement_to_IP`
+- `admin_exp_legacy`
+
+But in later years:
+
+- `admin_exp_legacy = 0`
+- `disbursement_to_IP = 0`
+
+So year 0 uses a broader observed cash-flow concept than later modeled years.
+
+One useful identity is exact in the frozen baseline for `2022`:
+
+- `net_cf_legacy`
+  = `total_ee_nc_cont + total_er_db_cont`
+  - `total_ben_payment`
+  - `total_refund`
+  - `disbursement_to_IP`
+  - `admin_exp_legacy`
+
+That year-0 baseline identity is closely related to valuation Table 2-3 and
+Table 2-4, but it is not identical on the contribution side. The disbursement
+side matches the valuation totals almost exactly, while the contribution side is
+about `$34.9` million lower than valuation Table 2-4 line `2`.
+
+This distinction matters because it shows that the initial funding row is a
+hybrid of:
+
+- observed valuation / ACFR cash flows
+- and compatibility-oriented baseline funding logic
+
+See also:
+
+- [year0_cashflow_treatment.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/year0_cashflow_treatment.md)
+
 ## Clean But Limited ACFR Payroll Anchors
 
 Source:

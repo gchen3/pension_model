@@ -374,6 +374,8 @@ Implication:
 - that supports the interpretation that the first-year `ben_payment` estimate
   was backed out from a broader first-year disbursement base rather than drawn
   from a direct class benefit-payment table
+- see also:
+  - [year0_cashflow_treatment.md](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/reports/year0_cashflow_treatment.md)
 
 ## What Is Not Yet Resolved
 
