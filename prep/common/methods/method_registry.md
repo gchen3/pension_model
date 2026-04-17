@@ -149,6 +149,36 @@ Recommended method statuses:
   - downstream allocation rule is known
   - upstream provenance of the class outflow constants is still unresolved
 
+### `first-year-disbursement-proxy-v1`
+
+- Status: `partially_confirmed`
+- Type: `legacy reconstruction`
+- Purpose: Estimate first-year class benefit payments when the best retained
+  class-level source is a broader disbursement concept rather than a direct
+  benefit-payment table.
+- Inputs:
+  - class-level disbursement allocations from a valuation or funding table
+  - plan-wide observed cash-flow totals from ACFR or financial statements
+  - a documented ratio that converts broader disbursements to the narrower
+    benefit-payment concept
+- Outputs:
+  - first-year class benefit-payment inputs
+- Core rule observed so far:
+  - `class_benefit_payment = class_disbursement_proxy * planwide_benefit_share`
+- Validation:
+  - exact equality to canonical first-year runtime values
+  - explicit reconciliation of what is included in the broader disbursement
+    base
+  - explicit documentation of any first-year-only cash-flow items
+- Confirmed examples:
+  - FRS first-year `ben_payment` path using valuation Table 2-4 line `3`
+    together with the ACFR plan-wide benefit share
+- Limits:
+  - this method can reproduce a reviewed runtime path without proving that the
+    path is the best conceptual choice for new plans
+  - should not be promoted to a default forward-looking method without plan-
+    specific review
+
 ### `eoc-payroll-subclass-allocation-v1`
 
 - Status: `partially_confirmed`
@@ -208,6 +238,37 @@ Recommended method statuses:
   - source references remain reproducible across tools and viewers
 - Confirmed examples:
   - FRS and TXTRS page crosswalk notes
+
+### `mortality-basis-dual-track-review-v1`
+
+- Status: `partially_confirmed`
+- Type: `source-faithful transform`
+- Purpose: Separate `can we reproduce the current runtime mortality files` from
+  `can we reconstruct the valuation's stated mortality basis`.
+- Inputs:
+  - current runtime mortality artifacts
+  - valuation mortality narrative and sample rates
+  - any retained legacy implementation code
+  - external mortality and improvement-scale reference files
+- Outputs:
+  - source-gap statement
+  - implementation-gap statement
+  - explicit classification of the runtime mortality path as source-faithful or
+    compatibility-oriented
+- Core rule:
+  - do not treat a named mortality basis as solved until both the source table
+    and the intended implementation rule are known
+  - compare runtime results against valuation specimen rates when available
+  - distinguish missing base tables from ambiguous projection-scale rules
+- Validation:
+  - explicit rate comparisons at specimen ages/years
+  - documented alignment or mismatch against valuation text
+- Confirmed examples:
+  - TXTRS mortality review
+- Limits:
+  - this is a review method, not a build method
+  - additional plan-specific source acquisition may still be required before a
+    source-faithful build is possible
 
 ## Method Design Guidance
 

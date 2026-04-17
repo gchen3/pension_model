@@ -167,12 +167,67 @@ So the current bias should be:
 If that changes later, the single-year reconstruction method should be treated
 as a deliberate shared estimation method, not an ad hoc convenience.
 
+### 11. First-year observed cash flows may be broader than the model's later-year benefit concept
+
+FRS exposed an important pattern that is likely to recur.
+
+The initial observed year may be anchored to:
+
+- valuation asset-development cash flows
+- ACFR deductions totals
+- class-allocated disbursement lines
+
+Those first-year observed values can be broader than the narrower modeled
+benefit-payment concept used in later projection years.
+
+Implications:
+
+- do not assume a first-year `benefit` input is conceptually identical to later
+  projected benefit payments
+- check whether year 0 includes refunds, admin expense, transfers, or other
+  disbursements in the observed source path
+- document explicitly when the first-year input is a proxy backed out from a
+  broader cash-flow concept
+
+This is not just a plan-specific FRS detail. It is a general prep risk whenever
+the best class-level source is a valuation funding table rather than a direct
+benefit-payment table.
+
+### 12. Mortality gaps can combine missing source tables with ambiguous implementation rules
+
+TXTRS shows that a mortality gap is not always solved just by obtaining the
+named external table.
+
+The unresolved pieces may include both:
+
+- missing plan-specific base rates
+- uncertainty about how the improvement scale is meant to be operationalized
+
+Examples of implementation ambiguity:
+
+- whether `Scale UMP 2021` is identical to a shared `MP-2021` workbook
+- whether `immediate convergence` means use ultimate rates immediately or only
+  after the published horizon
+- whether disabled-retiree mortality floors are applied before or after
+  projection
+
+So mortality prep should be treated as a two-part task:
+
+1. acquire the source tables
+2. confirm the intended implementation rule
+
+Without both, a runtime mortality artifact may be reproducible but still not be
+source-faithful.
+
 ## Recurring Source Situations To Expect On New Plans
 
 These patterns already look likely to recur:
 
 - valuation names a mortality basis but does not publish full rates
+- valuation names an improvement scale but leaves its implementation ambiguous
 - ACFR and AV totals differ for legitimate scope or measurement reasons
+- initial observed-year cash flows are broader than the later-year modeled
+  benefit concept
 - plan provisions are clear in prose but not directly encoded as tidy tables
 - active members are published in grouped age/service form
 - entrant profiles are published in grouped form

@@ -231,6 +231,11 @@ At minimum, the repo should preserve:
 - provenance conventions
 - runtime build rules
 - cross-plan lessons learned
+- first-year cash-flow treatment rules when observed year-0 inputs are broader
+  than the later-year modeled benefit concept
+- mortality review rules that separate missing external source tables from
+  ambiguity about how the named improvement scale or convergence rule should be
+  implemented
 
 Recommended shared homes:
 
