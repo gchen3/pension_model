@@ -93,6 +93,20 @@ Why needed:
   alone does not prove source-faithful implementation of the valuation's
   retiree basis
 
+Additional implementation clue already in hand:
+
+- the archived
+  [TxTRS_R_BModel revised.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_R_BModel%20revised.R)
+  explicitly notes:
+  - `Since the plan assumes "immediate convergence" of MP rates, the "ultimate rates" are used for all years`
+- but the current active
+  [TxTRS_model_inputs.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_model_inputs.R)
+  path appears to use the evolving MP schedule through the available years and
+  only then hold at the ultimate rate
+
+So the remaining question is not only “what external table is needed,” but also
+“which implementation of the improvement scale is the correct one.”
+
 Acceptable evidence could include:
 
 - a plan-specific mortality appendix or technical note

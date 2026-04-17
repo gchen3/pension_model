@@ -93,6 +93,16 @@ So the current reviewed runtime does preserve an employee-versus-retiree base
 rate distinction, but it still does so inside a Pub-2010 compatibility family
 rather than using the valuation's stated TRS-specific retiree tables.
 
+The active code path also reveals a more specific implementation detail:
+
+- male MP rates are shifted forward by two years by renaming the MP columns and
+  extending the tail with the last available column
+- the current path then uses the observed MP schedule through the workbook
+  horizon and only uses the ultimate column after the final published year
+
+That matters because it is not obviously the same as a blanket “immediate
+convergence” implementation of `Scale UMP 2021`.
+
 ### 3. Workbook-internal mortality tables appear secondary or stale
 
 `TxTRS_BM_Inputs.xlsx` contains sheets named:
@@ -129,6 +139,26 @@ paths:
 
 - an older workbook-based RP-2014 path
 - the current reviewed external Pub-2010 / MP-2021 compatibility path
+
+There is also a very specific clue in the archived RP-2014 path:
+
+- the commented legacy code says:
+  - `Since the plan assumes "immediate convergence" of MP rates, the "ultimate rates" are used for all years`
+- that note appears in the archived
+  [TxTRS_R_BModel revised.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_R_BModel%20revised.R)
+  immediately above the older RP-2014 / MP implementation
+
+This is important because it shows that at least one historical TXTRS code path
+explicitly recognized the valuation's immediate-convergence language and tried
+to implement it via ultimate rates for all years.
+
+The current active Pub-2010 / MP-2021 path does not appear to do that. It uses
+the evolving MP schedule through the available years and only then holds at the
+ultimate rate.
+
+So the retained TXTRS artifacts preserve not just different source families,
+but also different interpretations of how the mortality-improvement scale should
+be operationalized.
 
 ### 3a. Workbook `Funding Data` is minimal and valuation-anchored
 

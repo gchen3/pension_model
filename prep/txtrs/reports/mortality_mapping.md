@@ -152,6 +152,24 @@ There is also evidence of an older competing legacy path:
 That is useful because it shows the retained TXTRS materials contain more than
 one historical mortality implementation path.
 
+One further implementation clue is now clear:
+
+- the current active Pub-2010 / MP-2021 path in
+  [TxTRS_model_inputs.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_model_inputs.R)
+  shifts male MP rates forward two years and then applies the observed MP
+  schedule through the available years, using the ultimate column only after
+  the final published year
+- the archived
+  [TxTRS_R_BModel revised.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_R_BModel%20revised.R)
+  contains a commented note saying:
+  - `Since the plan assumes "immediate convergence" of MP rates, the "ultimate rates" are used for all years`
+
+So the retained TXTRS materials preserve at least two different interpretations
+of the improvement-scale implementation:
+
+- current active path: MP schedule by year, then ultimate after the horizon
+- older archived path: immediate convergence via ultimate rates for all years
+
 ## Main Alignment Findings
 
 ### What aligns
@@ -172,6 +190,41 @@ one historical mortality implementation path.
 - current runtime labels the basis as `pub_2010_teacher_below_median`, which is
   too coarse to express that active and retiree rates may come from different
   source families in a source-faithful build
+- the valuation explicitly says retiree mortality uses `Scale UMP 2021` with
+  `immediate convergence`, while the current active compatibility path does not
+  obviously implement that same immediate-convergence rule
+
+## Sample-Rate Comparison Against The Valuation
+
+The valuation publishes specimen mortality rates for `2023` and `2053`.
+
+When the current runtime mortality files are resolved through the project’s
+current mortality builder, the resulting rates are broadly similar in shape but
+not an exact match to the valuation samples.
+
+Examples:
+
+- active mortality, `2023`
+  - valuation average of male/female samples at age `40` ≈ `0.000448`
+  - current runtime resolved active rate at age `40` ≈ `0.000640`
+  - valuation average at age `80` ≈ `0.028227`
+  - current runtime resolved active rate at age `80` ≈ `0.023427`
+- retiree mortality, `2023`
+  - valuation average at age `60` ≈ `0.005017`
+  - current runtime resolved retiree rate at age `60` ≈ `0.004230`
+  - valuation average at age `90` ≈ `0.134628`
+  - current runtime resolved retiree rate at age `90` ≈ `0.113733`
+- retiree mortality, `2053`
+  - valuation average at age `60` ≈ `0.003337`
+  - current runtime resolved retiree rate at age `60` ≈ `0.002873`
+  - valuation average at age `100` ≈ `0.316601`
+  - current runtime resolved retiree rate at age `100` ≈ `0.266556`
+
+These comparisons are not perfect apples-to-apples because the runtime model is
+sex-neutral after averaging male and female rates, while the valuation samples
+are published separately by sex. But they are still useful evidence that the
+current runtime mortality is not a verbatim implementation of the valuation’s
+stated basis.
 
 ## Implication For Prep
 
