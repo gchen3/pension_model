@@ -65,7 +65,59 @@ Conclusion:
 - the current runtime formula is fully explained
 - this is no longer the mystery
 
-### Attempt 2: Baseline class outflows equal ACFR `Total Annual Benefits by System/Class`
+### Attempt 2: Baseline class outflows equal valuation Table 2-4 line `3` class disbursements
+
+Status:
+
+- `near-exact provenance match`
+
+Source:
+
+- [Florida FRS Valuation 2022.pdf](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/sources/Florida%20FRS%20Valuation%202022.pdf)
+  - Table 2-4 `Development of Actuarial Value of Assets by Membership Class`,
+    printed p. `18`, PDF p. `23`
+
+Tested comparison:
+
+- valuation Table 2-4 line `3` `Benefit Payments and other Disbursements`
+  by class, scaled from thousands to dollars
+
+Examples:
+
+- regular:
+  - Table 2-4 line `3` = `8,967,096,000`
+  - baseline outflow = `8,967,096,000`
+  - difference = `0`
+- special:
+  - Table 2-4 line `3` = `2,423,470,000`
+  - baseline outflow = `2,423,470,000`
+  - difference = `0`
+- admin:
+  - Table 2-4 line `3` = `8,090,000`
+  - baseline outflow = `8,090,000`
+  - difference = `0`
+- judges:
+  - Table 2-4 line `3` = `105,844,000`
+  - baseline outflow = `105,844,000`
+  - difference = `0`
+- senior management:
+  - Table 2-4 line `3` = `338,864,000`
+  - baseline outflow = `338,664,000`
+  - difference = `-200,000`
+
+Conclusion:
+
+- this is now the best current provenance match for the legacy class outflow
+  inputs
+- the remaining question is conceptual, not provenance
+- Table 2-4 line `3` is `Benefit Payments and other Disbursements` for plan
+  year `2021/2022`, not a narrow class benefit-payment table
+- so this evidence supports:
+  - where the class outflow inputs came from
+  - but not necessarily that they were the right target for first-year benefit
+    payments
+
+### Attempt 3: Baseline class outflows equal ACFR `Total Annual Benefits by System/Class`
 
 Status:
 
@@ -96,7 +148,7 @@ Conclusion:
 - ACFR statistical annual benefits are informative, but they are not a direct
   exact source for the baseline class outflows
 
-### Attempt 3: Baseline class outflows equal valuation Table C-5 annuitant annual benefits
+### Attempt 4: Baseline class outflows equal valuation Table C-5 annuitant annual benefits
 
 Status:
 
@@ -137,7 +189,7 @@ Conclusion:
 - valuation annuitant-benefit totals are also not a direct exact source for the
   baseline class outflows
 
-### Attempt 4: Baseline class outflows equal a composite of published payout slices
+### Attempt 5: Baseline class outflows equal a composite of published payout slices
 
 Status:
 
@@ -191,7 +243,7 @@ Conclusion:
 - this supports a `partially_reconstructed` interpretation rather than a solved
   direct-source mapping
 
-### Attempt 5: Search retained Reason workbooks for a pre-formula origin of the class outflow constants
+### Attempt 6: Search retained Reason workbooks for a pre-formula origin of the class outflow constants
 
 Status:
 
@@ -230,7 +282,7 @@ Conclusion:
   manual spreadsheet prep or missing R-side code that is not currently in the
   repo
 
-### Attempt 6: Compare the remaining `special` and `admin` gaps as class-scaled uplifts
+### Attempt 7: Compare the remaining `special` and `admin` gaps as class-scaled extra amounts
 
 Status:
 

@@ -15,7 +15,7 @@ Current class-level benefit-payment values live in:
 The config note already says the values are derived rather than directly
 published.
 
-## Three Relevant Source Families
+## Four Relevant Source Families
 
 ### 1. Financial-statement deductions table
 
@@ -47,7 +47,48 @@ That matters because it confirms the reviewed baseline is not just loosely
 consistent with the ACFR deductions table. The workbook literally seeds the
 same totals into the legacy intermediate model.
 
-### 2. ACFR statistical annuitant / annual-benefit tables
+### 2. Valuation AVA-development disbursement table
+
+Source:
+
+- [Florida FRS Valuation 2022.pdf](/home/donboyd5/Documents/python_projects/pension_model/prep/frs/sources/Florida%20FRS%20Valuation%202022.pdf)
+  - Table 2-4 `Development of Actuarial Value of Assets by Membership Class`,
+    printed p. `18`, PDF p. `23`
+
+This table is part of the AVA roll-forward from `July 1, 2021` to `July 1,
+2022`. Line `3` reports:
+
+- `Benefit Payments and other Disbursements`
+
+in `($ in Thousands)` by class.
+
+Those class values match the legacy class outflow inputs almost exactly:
+
+- regular = `8,967,096,000`
+- special = `2,423,470,000`
+- admin = `8,090,000`
+- judges = `105,844,000`
+- eco = `9,442,000`
+- eso = `53,526,000`
+- senior management = `338,864,000`
+- drop = `857,600,000`
+
+The important footnote says:
+
+- class-level contribution and disbursement information does not sum exactly to
+  the system-level financial-statement totals
+- lines `2` and `3` are allocated to the membership classes in proportion to
+  class-level information provided and then “trued-up” to the system-level
+  totals
+- the lines also reflect members moving between classes since the prior
+  valuation date
+
+This makes Table 2-4 line 3 the strongest current provenance match for the
+legacy class outflow inputs. But it also means those inputs are not pure class
+benefit payments. They are allocated class disbursements used for AVA
+development over the `2021/2022` plan year.
+
+### 3. ACFR statistical annuitant / annual-benefit tables
 
 Sources:
 
@@ -68,7 +109,7 @@ Example 2022 class totals from `Total Annual Benefits by System/Class`:
 - Special Risk Administrative Support = `7,284,354`
 - Elected Officers' = `164,431,365`
 
-### 3. Valuation annuitant-benefit table
+### 4. Valuation annuitant-benefit table
 
 Source:
 
@@ -99,6 +140,10 @@ Published annual benefits for current annuitants plus future DROP annuities
 - the retained Reason workbook applies those class outflow constants directly in
   `Funding Input!BL2:BR9` against the row-10 plan-wide cash-flow anchors in
   `Funding Input!BL10:BR10`
+- the baseline class outflow inputs are now much better explained:
+  - they match valuation Table 2-4 line `3` `Benefit Payments and other
+    Disbursements` exactly for all currently tracked classes except the
+    previously noted `200,000` senior-management discrepancy
 - the `ben_payment_ratio` is exactly the ACFR financial-deductions fraction:
   - `11,944,986,866 / 12,763,932,044 = 0.9358391148451025`
 - the class outflow figures used by the current reviewed baseline are:
@@ -117,6 +162,14 @@ Published annual benefits for current annuitants plus future DROP annuities
   deductions table does not
 - the valuation Table C-5 is also useful because it provides class-level
   annuitant annual benefits plus explicit EOC subclass splits
+- taken together, the current first-year path now looks like:
+  - valuation Table 2-4 line `3` class allocated disbursements for `2021/2022`
+  - multiplied by the ACFR plan-wide benefit share
+  - to estimate class-level first-year benefit payments
+
+This is a major improvement in provenance. But it does not settle the
+conceptual question of whether allocated class disbursements were the right
+source for first-year benefit payments.
 
 Example exact reproductions:
 
@@ -129,8 +182,16 @@ Example exact reproductions:
 
 ## Reconciliation Evidence
 
-The baseline class outflows are not an exact copy of either published
-class-benefit table.
+The baseline class outflows are now well explained as a provenance match to
+valuation Table 2-4 line `3`. The remaining question is conceptual, not merely
+provenance:
+
+- were those allocated class disbursements the right target for first-year
+  model benefit payments?
+- or were they only the best available proxy?
+
+That is why the comparisons below still matter. They compare the legacy class
+outflow inputs to narrower published benefit concepts.
 
 ### Comparison to ACFR statistical annual benefits
 
@@ -156,8 +217,12 @@ annuities:
 - eco outflow is lower by `1,925,000` (`-16.93%`)
 - eso outflow is lower by `11,458,000` (`-17.63%`)
 
-This pattern strongly suggests that the baseline class outflows are a legacy
-intermediate allocation, not a direct copy of one published table.
+This pattern is now easier to interpret:
+
+- the legacy class outflows are not trying to match this statistical benefit
+  table exactly
+- they are closer to the broader valuation Table 2-4 disbursement concept than
+  to statistical annual benefits
 
 ### Comparison to a mixed published-payout composite
 
@@ -190,10 +255,11 @@ Results:
 
 Implication:
 
-- the legacy outflow constants look more like a class-specific composite of
-  published payout slices than a copy of any single published source table
-- but the composite rule is not uniform enough yet to claim a full
-  reconstruction
+- if the modeling target is “first-year class benefit payments,” the mixed
+  published payout composite may be conceptually closer than Table 2-4 line `3`
+- but the current reviewed runtime does not use that narrower composite
+- instead, it appears to use Table 2-4 line `3` as the class disbursement base
+  and then applies the plan-wide benefit share
 
 One additional clue now stands out:
 
@@ -206,8 +272,8 @@ One additional clue now stands out:
   - special unexplained gap is about `9.53%`
   - admin unexplained gap is about `10.81%`
 
-That pattern suggests a common class-specific uplift for the Special Risk family
-rather than two unrelated mismatches.
+That pattern suggests a common class-specific extra amount for the Special Risk
+family rather than two unrelated mismatches.
 
 The ACFR plan-provisions narrative makes that plausible:
 
@@ -230,8 +296,13 @@ The workbook evidence sharpens that conclusion:
   `Funding Input!BL2:BR9`
 - those constants do not appear elsewhere in the retained FRS workbook as
   helper inputs or derived references
-- the unresolved part is now much narrower: where the class outflow constants
-  themselves came from before being multiplied through that row-10 block
+- but valuation Table 2-4 now provides the missing source for those constants
+  in substance
+- the unresolved part is now narrower and more conceptual:
+  - whether using Table 2-4 line `3` was the right first-year benefit-payment
+    target
+  - and whether a better class benefit-payment method should replace it in a
+    future prep design
 
 ## Additional ACFR Clue Mining
 
@@ -276,7 +347,33 @@ Implication:
 - the ACFR strengthens the case that the remaining `special` and `admin`
   residuals are policy-driven rather than arbitrary
 - but the ACFR still does not publish enough class-specific detail to
-  reconstruct the exact uplift embedded in the legacy class outflow constants
+  reconstruct the exact extra amount embedded in the legacy class outflow
+  constants
+
+## Truth-Table / Baseline Cash-Flow Nuance
+
+The frozen FRS baseline also shows that administrative expenses are only present
+in the initial year.
+
+Evidence:
+
+- [plans/frs/baselines/r_truth_table.csv](/home/donboyd5/Documents/python_projects/pension_model/plans/frs/baselines/r_truth_table.csv)
+  - `2022 admin_exp = 22,494,571`
+  - `2023+ admin_exp = 0`
+- [plans/frs/baselines/frs_funding.csv](/home/donboyd5/Documents/python_projects/pension_model/plans/frs/baselines/frs_funding.csv)
+  - `2022 admin_exp_legacy = 22,494,571`
+  - `2023+ admin_exp_legacy = 0`
+  - `2022 disbursement_to_IP = 768,106,850`
+  - `2023+ disbursement_to_IP = 0`
+
+Implication:
+
+- the first-year baseline is using a broader observed cash-flow concept that
+  includes admin expense and transfers to the investment plan
+- later years are projected on a narrower modeled cash-flow basis
+- that supports the interpretation that the first-year `ben_payment` estimate
+  was backed out from a broader first-year disbursement base rather than drawn
+  from a direct class benefit-payment table
 
 ## What Is Not Yet Resolved
 
@@ -288,8 +385,8 @@ Open points:
 - where `regular_outflow`, `special_outflow`, `admin_outflow`,
   `judges_outflow`, `eso_outflow`, `eco_outflow`, and
   `senior_management_outflow` originally came from in the Reason/R workflow
-- whether those class outflows were copied directly from one published table,
-  or derived from a more complex intermediate allocation
+- whether using valuation Table 2-4 line `3` was the right conceptual source
+  for first-year benefit payments, or only a practical proxy
 - how the Elected Officers' total was split across runtime `eco`, `eso`, and
   `judges`
 - how the baseline class outflows reconcile to the ACFR statistical class
@@ -315,8 +412,10 @@ And more specifically:
 
 - exactly reproducible from the current reviewed baseline
 - source-grounded through the plan-wide ACFR deductions ratio
-- but still dependent on upstream class outflow inputs whose published
-  provenance has not yet been reconstructed
+- now strongly tied to valuation Table 2-4 line `3` class disbursement
+  allocations for `2021/2022`
+- but still dependent on a judgment about whether those allocated
+  disbursements were the right conceptual basis for first-year benefit payments
 
 The evidence now suggests that a fully reviewed reconstruction will probably
 need:
