@@ -85,6 +85,16 @@ Examples:
 So the workbook is constructing a smoothed age profile from grouped source
 values rather than copying a published age-by-age table.
 
+Additional narrowing result:
+
+- a repo-wide search for representative grouped literals such as `532`,
+  `24,738`, `56,932`, `94,850`, `107,028`, `1,936,166,924`, and
+  `2,741,905,661` did not find a retained upstream table or note that explains
+  those grouped inputs outside the workbook formulas themselves
+
+So, as currently retained in the repo, the workbook explains the smoothing step
+but not the source provenance of the grouped values being smoothed.
+
 ## Current Working Interpretation
 
 The correct classification is currently:
@@ -103,6 +113,8 @@ PDF-only path is now fully known.
 - the workbook uses explicit five-year spreading logic for most ages
 - the workbook `Retiree Distribution` sheet is a substantive intermediate
   artifact, not a passive copy
+- the grouped values feeding that intermediate artifact currently appear to be
+  off-workbook or otherwise not retained in the repo
 
 ## What Is Not Yet Resolved
 

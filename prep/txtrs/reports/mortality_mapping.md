@@ -90,6 +90,15 @@ Current runtime base-rate file contains only one table label:
 
 - `teacher_below_median`
 
+But the current runtime base-rate file does still distinguish:
+
+- `member_type = employee`
+- `member_type = retiree`
+
+So the stage-3 representation is not using one identical `qx` curve for all
+statuses. Instead, it stores separate employee and retiree rates under one
+shared Pub-2010-derived table family label.
+
 ## How Current Stage-3 Mortality Was Built
 
 The legacy conversion script is explicit:
@@ -101,8 +110,47 @@ It builds current stage-3 mortality from:
 - `PubT-2010(B)` for both `employee` and `retiree` base rates
 - MP-2021 for improvement
 
+The shared loader confirms why this works:
+
+- the SOA `PubT-2010(B)` sheet itself contains both:
+  - `Employee`
+  - `Healthy Retiree`
+    columns for female and male
+- the conversion path reads those into:
+  - `employee_female`
+  - `employee_male`
+  - `healthy_retiree_female`
+  - `healthy_retiree_male`
+- then writes them to runtime `base_rates.csv` as:
+  - `member_type = employee`
+  - `member_type = retiree`
+
+Representative examples from the current runtime artifact:
+
+- age `40`:
+  - employee and retiree rates are the same
+- age `60`:
+  - female employee `0.00204`, female retiree `0.00344`
+  - male employee `0.00357`, male retiree `0.00491`
+- age `80`:
+  - female employee `0.02318`, female retiree `0.02895`
+  - male employee `0.02874`, male retiree `0.04198`
+
 So the current reviewed runtime mortality artifact is clearly a compatibility
 construction, not a direct transcription of the valuation’s full stated basis.
+
+There is also evidence of an older competing legacy path:
+
+- the retained workbook `Mortality Rates` sheet contains
+  `RP_2014_employee_*` and `RP_2014_ann_employee_*` columns
+- the archived script
+  [TxTRS_R_BModel revised.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_R_BModel%20revised.R)
+  builds mortality from those workbook RP-2014 columns
+- the currently reviewed stage-3 path does **not** use that workbook RP-2014
+  path; it uses external Pub-2010 and MP-2021 files instead
+
+That is useful because it shows the retained TXTRS materials contain more than
+one historical mortality implementation path.
 
 ## Main Alignment Findings
 
@@ -122,8 +170,8 @@ construction, not a direct transcription of the valuation’s full stated basis.
   the healthy-pensioner basis with explicit minimum rates
 - current runtime uses one base-table family for both active and retiree rates
 - current runtime labels the basis as `pub_2010_teacher_below_median`, which is
-  too specific to serve as the long-run source-faithful identifier if retiree
-  rates come from a different family
+  too coarse to express that active and retiree rates may come from different
+  source families in a source-faithful build
 
 ## Implication For Prep
 

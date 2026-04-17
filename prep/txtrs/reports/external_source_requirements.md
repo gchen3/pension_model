@@ -58,6 +58,8 @@ Why needed:
 
 - the valuation names this as the post-retirement basis
 - the current runtime uses a Pub-2010 compatibility basis instead
+- more specifically, the current runtime uses distinct Pub-2010 `Employee` and
+  `Healthy Retiree` columns under one shared Pub-2010 table family label
 - without the full table values, we cannot claim source-faithful retiree
   mortality reconstruction
 
@@ -87,6 +89,9 @@ Why needed:
 - the valuation names `Scale UMP 2021`
 - those may be equivalent in practice, but that should be confirmed rather than
   assumed
+- the current reviewed runtime uses MP-2021 in a compatibility path, but that
+  alone does not prove source-faithful implementation of the valuation's
+  retiree basis
 
 Acceptable evidence could include:
 

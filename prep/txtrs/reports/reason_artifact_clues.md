@@ -80,6 +80,19 @@ deliberately compatibility-oriented around:
 rather than source-faithful reproduction of the valuation's stated retiree
 mortality basis.
 
+An important refinement is now clear:
+
+- the Pub-2010 teacher sheet used by the current path is not one flat mortality
+  curve
+- it contains separate `Employee` and `Healthy Retiree` columns for female and
+  male
+- the current stage-3 build writes those out as distinct runtime
+  `member_type = employee` and `member_type = retiree` rows
+
+So the current reviewed runtime does preserve an employee-versus-retiree base
+rate distinction, but it still does so inside a Pub-2010 compatibility family
+rather than using the valuation's stated TRS-specific retiree tables.
+
 ### 3. Workbook-internal mortality tables appear secondary or stale
 
 `TxTRS_BM_Inputs.xlsx` contains sheets named:
@@ -98,6 +111,24 @@ Implication:
 - the workbook still contains historically meaningful intermediate structure,
   but active-path logic must be confirmed from the R code rather than inferred
   from sheet names alone
+
+The retained workbook does contain a distinct older mortality basis:
+
+- `Mortality Rates` has columns:
+  - `RP_2014_employee_male`
+  - `RP_2014_employee_female`
+  - `RP_2014_ann_employee_male`
+  - `RP_2014_ann_employee_female`
+- the archived
+  [TxTRS_R_BModel revised.R](/home/donboyd5/Documents/python_projects/pension_model/R_model/R_model_txtrs/TxTRS_R_BModel%20revised.R)
+  uses those workbook RP-2014 columns to build separate active and retiree
+  mortality tables
+
+So the retained TXTRS artifacts preserve at least two historical mortality
+paths:
+
+- an older workbook-based RP-2014 path
+- the current reviewed external Pub-2010 / MP-2021 compatibility path
 
 ### 3a. Workbook `Funding Data` is minimal and valuation-anchored
 
@@ -155,6 +186,13 @@ The construction is explicit in the worksheet cells:
 - ages `65` to `69` (`A12:A16`) each use:
   - `B12:B16 = 94,850 / 5`
   - `C12:C16 = 2,741,905,661 / 5`
+
+One more narrowing result is useful:
+
+- a repo-wide search for representative grouped literals from these formulas did
+  not find a retained upstream source table elsewhere in the repo
+- so the retained workbook shows the smoothing rule, but not the provenance of
+  the grouped values being smoothed
 
 ### 3c. Workbook `Entrant Profile` is partly synthetic
 
