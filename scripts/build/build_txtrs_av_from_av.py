@@ -9,6 +9,7 @@ Current scope:
   - demographics/salary_growth.csv
   - decrements/reduction_gft.csv
   - decrements/reduction_others.csv
+  - funding/init_funding.csv
 
 This script intentionally avoids using existing txtrs runtime files as inputs.
 """
@@ -28,6 +29,8 @@ PDF_PATH = PROJECT_ROOT / "prep" / "txtrs-av" / "sources" / "Texas TRS Valuation
 OUT_DIR = PROJECT_ROOT / "plans" / "txtrs-av" / "data"
 
 TABLE17_PDF_PAGE = 48
+TABLE2_PDF_PAGE = 24
+TABLE4_PDF_PAGE = 27
 SALARY_GROWTH_PDF_PAGE = 70
 ENTRANT_PROFILE_PDF_PAGE = 76
 REDUCTION_PDF_PAGE = 54
@@ -76,6 +79,40 @@ def _extract_matching_line(lines: list[str], pattern: str) -> str:
         if regex.search(line):
             return line
     raise ValueError(f"Could not find line matching {pattern!r}")
+
+
+def _strip_label(line: str, pattern: str) -> str:
+    return re.sub(pattern, "", line, count=1)
+
+
+def _extract_first_int_after_label(lines: list[str], pattern: str) -> int:
+    line = _extract_matching_line(lines, pattern)
+    payload = _strip_label(line, pattern)
+    match = re.search(r"(\d[\d,]*)", payload)
+    if not match:
+        raise ValueError(f"Could not extract integer from line: {line}")
+    return int(match.group(1).replace(",", ""))
+
+
+def _extract_first_money_after_label(lines: list[str], pattern: str) -> float:
+    line = _extract_matching_line(lines, pattern)
+    payload = _strip_label(line, pattern)
+    match = re.search(r"\$?\s*\(?([\d,]+(?:\.\d+)?)\)?", payload)
+    if not match:
+        raise ValueError(f"Could not extract money value from line: {line}")
+    value = float(match.group(1).replace(",", ""))
+    if "(" in payload and ")" in payload:
+        value = -value
+    return value
+
+
+def _extract_first_percent_after_label(lines: list[str], pattern: str) -> float:
+    line = _extract_matching_line(lines, pattern)
+    payload = _strip_label(line, pattern)
+    match = re.search(r"(\d+(?:\.\d+)?)%", payload)
+    if not match:
+        raise ValueError(f"Could not extract percent from line: {line}")
+    return float(match.group(1)) / 100.0
 
 
 def _parse_table17() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -258,6 +295,71 @@ def _parse_reduction_tables() -> tuple[pd.DataFrame, pd.DataFrame]:
     return gft, others
 
 
+def _parse_init_funding() -> pd.DataFrame:
+    table2_lines = _pdf_page_text(PDF_PATH, TABLE2_PDF_PAGE).splitlines()
+    table4_lines = _pdf_page_text(PDF_PATH, TABLE4_PDF_PAGE).splitlines()
+
+    total_payroll = _extract_first_money_after_label(
+        table2_lines, r"^\s*10\.\s*Projected Payroll for Contributions\s*"
+    )
+    total_aal = _extract_first_money_after_label(
+        table2_lines, r"^\s*7\.\s*Actuarial Accrued Liability\s*"
+    )
+    total_ava = _extract_first_money_after_label(
+        table2_lines, r"^\s*8\.\s*Actuarial Value of Assets\s*"
+    )
+    admin_exp_rate = _extract_first_percent_after_label(
+        table2_lines, r"^\s*c\.\s*Administrative expenses\s*"
+    )
+    total_mva = _extract_first_money_after_label(
+        table4_lines, r"^\s*6\.\s*Market value of assets at end of year\s*"
+    )
+
+    remaining_2023_line = _extract_matching_line(table4_lines, r"^\s*2023\s")
+    remaining_tokens = re.findall(r"\(?[\d,]+\)?", remaining_2023_line)
+    if len(remaining_tokens) < 5:
+        raise ValueError(f"Unexpected Table 4 2023 deferral row: {remaining_2023_line}")
+    remaining_after_valuation = -float(remaining_tokens[-1].replace("(", "").replace(")", "").replace(",", ""))
+
+    total_ual_ava = total_aal - total_ava
+    total_ual_mva = total_aal - total_mva
+    fr_ava = total_ava / total_aal
+    fr_mva = total_mva / total_aal
+
+    row = {
+        "class": "all",
+        "year": 2024,
+        "total_payroll": total_payroll,
+        "admin_exp_rate": admin_exp_rate,
+        "total_aal": total_aal,
+        "aal_legacy": total_aal,
+        "aal_new": 0.0,
+        "total_ava": total_ava,
+        "ava_legacy": total_ava,
+        "ava_new": 0.0,
+        "total_mva": total_mva,
+        "mva_legacy": total_mva,
+        "mva_new": 0.0,
+        "total_ual_ava": total_ual_ava,
+        "ual_ava_legacy": total_ual_ava,
+        "ual_ava_new": 0.0,
+        "total_ual_mva": total_ual_mva,
+        "ual_mva_legacy": total_ual_mva,
+        "ual_mva_new": 0.0,
+        "fr_ava": fr_ava,
+        "fr_mva": fr_mva,
+        "defer_y1_legacy": 0.0,
+        "defer_y2_legacy": remaining_after_valuation,
+        "defer_y3_legacy": 0.0,
+        "defer_y4_legacy": 0.0,
+        "defer_y1_new": 0.0,
+        "defer_y2_new": 0.0,
+        "defer_y3_new": 0.0,
+        "defer_y4_new": 0.0,
+    }
+    return pd.DataFrame([row])
+
+
 def _write_csv(df: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
@@ -269,6 +371,7 @@ def main() -> None:
     entrant_profile = _parse_entrant_profile()
     salary_growth = _parse_salary_growth()
     reduction_gft, reduction_others = _parse_reduction_tables()
+    init_funding = _parse_init_funding()
 
     _write_csv(headcount, OUT_DIR / "demographics" / "all_headcount.csv")
     _write_csv(salary, OUT_DIR / "demographics" / "all_salary.csv")
@@ -276,6 +379,7 @@ def main() -> None:
     _write_csv(salary_growth, OUT_DIR / "demographics" / "salary_growth.csv")
     _write_csv(reduction_gft, OUT_DIR / "decrements" / "reduction_gft.csv")
     _write_csv(reduction_others, OUT_DIR / "decrements" / "reduction_others.csv")
+    _write_csv(init_funding, OUT_DIR / "funding" / "init_funding.csv")
 
 
 if __name__ == "__main__":
