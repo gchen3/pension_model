@@ -318,6 +318,8 @@
   "modeling": {
     "use_earliest_retire": false,
     "term_vested_method": "growing_annuity",
+    "cashflow_discount_basis": "baseline_dr_current",
+    "valuation_discount_basis": "scenario_dr_current",
     "male_mp_forward_shift": 0,
     "age_groups": [
       {"max_age": 24, "label": "under_25"},

@@ -75,6 +75,37 @@ class PlanConfig:
     def scenario_name(self) -> Optional[str]:
         return self.raw.get("_scenario_name")
 
+    @property
+    def baseline_dr_current(self) -> float:
+        return self.raw.get("_baseline_economic", {}).get("dr_current", self.dr_current)
+
+    def _resolve_discount_rate_basis(self, basis: str) -> float:
+        basis_rates = {
+            "scenario_dr_current": self.dr_current,
+            "baseline_dr_current": self.baseline_dr_current,
+        }
+        try:
+            return basis_rates[basis]
+        except KeyError as exc:
+            valid = ", ".join(sorted(basis_rates))
+            raise ValueError(f"Unknown discount-rate basis {basis!r}; expected one of {valid}") from exc
+
+    @property
+    def cashflow_discount_basis(self) -> str:
+        return self.raw.get("modeling", {}).get("cashflow_discount_basis", "scenario_dr_current")
+
+    @property
+    def valuation_discount_basis(self) -> str:
+        return self.raw.get("modeling", {}).get("valuation_discount_basis", "scenario_dr_current")
+
+    @property
+    def cashflow_discount_rate(self) -> float:
+        return self._resolve_discount_rate_basis(self.cashflow_discount_basis)
+
+    @property
+    def valuation_discount_rate(self) -> float:
+        return self._resolve_discount_rate_basis(self.valuation_discount_basis)
+
     def resolve_data_dir(self) -> Path:
         data_cfg = self.raw.get("data", {})
         data_dir_str = data_cfg.get("data_dir", f"plans/{self.plan_name}/data")

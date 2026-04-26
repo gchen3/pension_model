@@ -83,6 +83,8 @@ def load_plan_config(
     with open(config_path) as f:
         raw = json.load(f)
 
+    baseline_economic = dict(raw.get("economic", {}))
+
     scenario_name = None
     if scenario_path is not None:
         with open(scenario_path) as f:
@@ -90,6 +92,7 @@ def load_plan_config(
         scenario_name = scenario.get("name", scenario_path.stem)
         raw = _deep_merge(raw, scenario.get("overrides", {}))
 
+    raw["_baseline_economic"] = baseline_economic
     if scenario_name:
         raw["_scenario_name"] = scenario_name
 

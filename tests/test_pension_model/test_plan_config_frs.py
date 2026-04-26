@@ -1,10 +1,12 @@
 """FRS-specific PlanConfig tests."""
 
+from pathlib import Path
+
 import pytest
 
 pytestmark = [pytest.mark.unit]
 
-from pension_model.plan_config import load_frs_config
+from pension_model.plan_config import load_frs_config, load_plan_config
 
 
 @pytest.fixture(scope="module")
@@ -38,3 +40,18 @@ class TestPlanConfigLoad:
         assert frs_config._tier_name_to_id == {"tier_1": 0, "tier_2": 1, "tier_3": 2}
         assert frs_config._tier_id_to_name == ("tier_1", "tier_2", "tier_3")
         assert frs_config._tier_id_to_fas_years == (5, 8, 8)
+
+    def test_frs_high_discount_rate_roles(self):
+        root = Path(__file__).parents[2]
+        config = load_plan_config(
+            root / "plans" / "frs" / "config" / "plan_config.json",
+            root / "plans" / "frs" / "config" / "calibration.json",
+            root / "scenarios" / "high_discount.json",
+        )
+
+        assert config.baseline_dr_current == 0.067
+        assert config.dr_current == 0.075
+        assert config.cashflow_discount_basis == "baseline_dr_current"
+        assert config.valuation_discount_basis == "scenario_dr_current"
+        assert config.cashflow_discount_rate == 0.067
+        assert config.valuation_discount_rate == 0.075
