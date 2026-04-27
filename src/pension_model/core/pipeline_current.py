@@ -149,7 +149,11 @@ def compute_current_term_vested_liability(class_name: str, constants) -> pd.Data
     class_data = constants.class_data[class_name]
 
     pvfb_term_current = class_data.pvfb_term_current
-    discount_rate = constants.economic.dr_current
+    # The synthetic payment stream is sized at the rate the input PVFB
+    # was published at (baseline dr_current); the resulting stream is
+    # then PV'd at the scenario dr_current. See docs/discount_rate_scenarios.md.
+    cashflow_rate = constants.economic.baseline_dr_current
+    valuation_rate = constants.economic.dr_current
     payroll_growth = constants.economic.payroll_growth
     amo_period = constants.funding.amo_period_term
     years = list(range(ranges.start_year, ranges.start_year + ranges.model_period + 1))
@@ -163,10 +167,10 @@ def compute_current_term_vested_liability(class_name: str, constants) -> pd.Data
         )
         ann_ratio = amo_weights / amo_weights[0]
 
-        first_payment = pvfb_term_current / _npv(discount_rate, ann_ratio)
+        first_payment = pvfb_term_current / _npv(cashflow_rate, ann_ratio)
         term_payments = first_payment * ann_ratio
         full_stream = np.concatenate(([0.0], term_payments))
-        full_aal = _roll_npv(discount_rate, full_stream)
+        full_aal = _roll_npv(valuation_rate, full_stream)
 
         retire_ben_term_est = np.zeros(len(years))
         aal_term_current = np.zeros(len(years))
@@ -176,7 +180,7 @@ def compute_current_term_vested_liability(class_name: str, constants) -> pd.Data
             if i < len(full_aal):
                 aal_term_current[i] = full_aal[i]
     else:
-        retire_ben_term = _get_pmt(discount_rate, payroll_growth, amo_period, pvfb_term_current, t=1)
+        retire_ben_term = _get_pmt(cashflow_rate, payroll_growth, amo_period, pvfb_term_current, t=1)
         amo_years = list(range(ranges.start_year + 1, ranges.start_year + 1 + amo_period))
         retire_ben_term_est = np.zeros(len(years))
         term_payments = _recur_grow3(retire_ben_term, payroll_growth, amo_period)
@@ -187,7 +191,7 @@ def compute_current_term_vested_liability(class_name: str, constants) -> pd.Data
                     retire_ben_term_est[i] = term_payments[idx]
 
         aal_term_current = _roll_pv(
-            discount_rate,
+            valuation_rate,
             payroll_growth,
             amo_period,
             retire_ben_term_est,

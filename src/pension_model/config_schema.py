@@ -30,6 +30,7 @@ class PlanConfig:
     dr_current: float
     dr_new: float
     dr_old: float
+    baseline_dr_current: float
     payroll_growth: float
     pop_growth: float
     inflation: float

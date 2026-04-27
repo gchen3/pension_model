@@ -1,9 +1,12 @@
 """FRS-specific PlanConfig tests."""
 
+from pathlib import Path
+
 import pytest
 
 pytestmark = [pytest.mark.unit]
 
+from pension_model.config_loading import load_plan_config
 from pension_model.plan_config import load_frs_config
 
 
@@ -38,3 +41,27 @@ class TestPlanConfigLoad:
         assert frs_config._tier_name_to_id == {"tier_1": 0, "tier_2": 1, "tier_3": 2}
         assert frs_config._tier_id_to_name == ("tier_1", "tier_2", "tier_3")
         assert frs_config._tier_id_to_fas_years == (5, 8, 8)
+
+
+class TestBaselineDrCurrentSnapshot:
+    """The baseline dr_current must survive scenario overrides.
+
+    The synthetic term-vested cashflow stream is sized at the rate the
+    input PVFB was published at; that rate stays at baseline regardless
+    of scenario. See docs/discount_rate_scenarios.md.
+    """
+
+    def test_baseline_equals_dr_current_when_no_scenario(self, frs_config):
+        assert frs_config.baseline_dr_current == frs_config.dr_current == 0.067
+
+    def test_baseline_preserved_under_high_discount(self):
+        root = Path(__file__).resolve().parents[2]
+        config = load_plan_config(
+            root / "plans" / "frs" / "config" / "plan_config.json",
+            calibration_path=root / "plans" / "frs" / "config" / "calibration.json",
+            scenario_path=root / "scenarios" / "high_discount.json",
+        )
+        assert config.baseline_dr_current == 0.067
+        assert config.dr_current == 0.075
+        assert config.economic.baseline_dr_current == 0.067
+        assert config.economic.dr_current == 0.075
