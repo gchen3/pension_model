@@ -76,7 +76,7 @@ Optional plan features are turned on in config, not in code. A plan's `plan_conf
 
 - **Data files:** tier-specific DROP entry probabilities at `plans/frs/baselines/decrement_tables/drop_entry_tier{1,2}.csv` — the probability an active member enters DROP by age × YOS.
 
-- **Limitations (from [repo_goals.md](repo_goals.md)):** FRS DROP is currently modeled as a simplified adjustment to the active cohort, not as a full sub-cohort with its own state, interest credits, and cash-flow separation. This matches the reference R model but is a known limitation — full state-based DROP is on the long-term roadmap and will land when a plan with a richer DROP design requires it.
+- **Limitations (from [repo_goals.md](../meta-docs/repo_goals.md)):** FRS DROP is currently modeled as a simplified adjustment to the active cohort, not as a full sub-cohort with its own state, interest credits, and cash-flow separation. This matches the reference R model but is a known limitation — full state-based DROP is on the long-term roadmap and will land when a plan with a richer DROP design requires it.
 
 ### How scenarios interact with these features
 

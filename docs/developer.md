@@ -368,7 +368,7 @@ You need at minimum these CSV files (replace `{class}` with your class name, e.g
 | demographics/ | `{class}_headcount.csv` | Headcount by age and YOS |
 | demographics/ | `salary_growth.csv` | Salary growth rates by YOS |
 | demographics/ | `retiree_distribution.csv` | Current retiree age and benefit distribution |
-| decrements/ | `{class}_termination_rates.csv` | Termination rates (see [termination_rate_design.md](termination_rate_design.md)) |
+| decrements/ | `{class}_termination_rates.csv` | Termination rates (see [termination_rate_design.md](design/termination_rate_design.md)) |
 | decrements/ | `{class}_retirement_rates.csv` | Retirement rates by age and tier |
 | mortality/ | `base_rates.csv` | Base mortality rates by age, gender, status |
 | mortality/ | `improvement_scale.csv` | Mortality improvement rates by age, gender, year |
@@ -537,5 +537,5 @@ Some tests are marked `skip` because they depend on Excel source files not commi
 
 Specialized design decisions are documented in separate files:
 
-- [Early Retirement Reduction Design](early_retirement_reduction_design.md) — the three reduction patterns (formula-based, age-based table, YOS x age matrix), how they're stored in config vs CSV, and policy levers for scenario analysis.
-- [Termination Rate Design](termination_rate_design.md) — structural patterns (YOS-only, select & ultimate, years-from-normal-retirement), the `lookup_type` CSV format, and why data isn't pre-expanded.
+- [Early Retirement Reduction Design](design/early_retirement_reduction_design.md) — the three reduction patterns (formula-based, age-based table, YOS x age matrix), how they're stored in config vs CSV, and policy levers for scenario analysis.
+- [Termination Rate Design](design/termination_rate_design.md) — structural patterns (YOS-only, select & ultimate, years-from-normal-retirement), the `lookup_type` CSV format, and why data isn't pre-expanded.

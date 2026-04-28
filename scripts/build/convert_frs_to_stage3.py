@@ -114,7 +114,7 @@ def convert_termination_rates():
 
     FRS termination rates use YOS + age-group bands. We expand age groups to
     individual ages and use lookup_type='yos' with an age column.
-    See docs/termination_rate_design.md for rationale.
+    See docs/design/termination_rate_design.md for rationale.
     """
     print("Converting termination rates...")
 

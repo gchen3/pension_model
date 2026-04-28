@@ -6,7 +6,7 @@ A Python simulation model for **public-pension policy research** — projects AA
 
 **Summary of goals:** Reproduce two reference R models exactly (Florida FRS, Texas TRS), generalize so new plans are config + data only, then use it to analyze policy alternatives. ONLY AFTER MODEL IS SUFFICIENTLY GENERALIZED DO WE IMPLEMENT IMPROVEMENTS TO THE R MODEL. BEFORE THAT, OPEN GITHUB ISSUES IDENTIFYING POTENTIAL IMPROVEMENTS.
 
-- Full goals, priorities, and design principles: [repo_goals.md](docs/repo_goals.md)
+- Full goals, priorities, and design principles: [repo_goals.md](../meta-docs/repo_goals.md)
 
 ### How this learns from and builds on our R model
 
@@ -52,7 +52,7 @@ This workbook is the evidence that Python matches R. It’s regenerated on every
 | [scripts/](../scripts/) | One-off utilities: data extraction, baseline building, validation |
 | [tests/](../tests/) | Pytest suite — check for R-baseline regression, check identities and similar calculations |
 | [output/](../output/) | Results of simulation runs: `summary.csv`, `liability_stacked.csv`, `truth_tables.xlsx` (gitignored) |
-| [docs/](../docs/) | This doc, [repo_goals.md](repo_goals.md), architecture notes |
+| [docs/](../docs/) | This doc, architecture notes, design docs (see also [meta-docs/repo_goals.md](../meta-docs/repo_goals.md)) |
 | [R_model/](../R_model/) | The reference R models (FRS and TXTRS) — copied per environment, not tracked |
 
 **The core idea:** everything plan-specific lives in `plans/<plan>/`. The Python code in `src/pension_model/` is plan-agnostic as are the JSON files in and `scenarios/*.json` .

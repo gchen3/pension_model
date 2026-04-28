@@ -217,7 +217,7 @@ A "proper" model would calibrate component-by-component (one factor per cohort) 
 
 Two rules:
 
-1. **Match R first.** Per `docs/repo_goals.md`, exact reproduction of R is a hard constraint on the matching branch. We do not change actuarial behavior to "improve" on R while we are still in matching mode; we file issues for improvements and tackle them later on their own branches.
+1. **Match R first.** Per `meta-docs/repo_goals.md`, exact reproduction of R is a hard constraint on the matching branch. We do not change actuarial behavior to "improve" on R while we are still in matching mode; we file issues for improvements and tackle them later on their own branches.
 2. **Keep the data anchor in code, not config.** The "use baseline `dr_current` to size the Component-1 synthetic stream" rule is an engineering invariant tied to what the input data means. It lives in `compute_current_term_vested_liability` (`src/pension_model/core/pipeline_current.py`), not as a config knob.
 
 Concretely, the engine snapshots the baseline `dr_current` at config-load time (before any scenario override is merged in). When `compute_current_term_vested_liability` runs:

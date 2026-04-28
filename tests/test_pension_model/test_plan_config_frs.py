@@ -48,7 +48,7 @@ class TestBaselineDrCurrentSnapshot:
 
     The synthetic term-vested cashflow stream is sized at the rate the
     input PVFB was published at; that rate stays at baseline regardless
-    of scenario. See docs/discount_rate_scenarios.md.
+    of scenario. See docs/design/discount_rate_scenarios.md.
     """
 
     def test_baseline_equals_dr_current_when_no_scenario(self, frs_config):

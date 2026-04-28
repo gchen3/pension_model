@@ -151,7 +151,7 @@ def compute_current_term_vested_liability(class_name: str, constants) -> pd.Data
     pvfb_term_current = class_data.pvfb_term_current
     # The synthetic payment stream is sized at the rate the input PVFB
     # was published at (baseline dr_current); the resulting stream is
-    # then PV'd at the scenario dr_current. See docs/discount_rate_scenarios.md.
+    # then PV'd at the scenario dr_current. See docs/design/discount_rate_scenarios.md.
     cashflow_rate = constants.economic.baseline_dr_current
     valuation_rate = constants.economic.dr_current
     payroll_growth = constants.economic.payroll_growth

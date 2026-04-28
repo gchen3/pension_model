@@ -6,7 +6,7 @@ Exact reproduction of current R-model results remains a hard constraint. Cleanup
 
 ## Documentation
 
-- [docs/repo_goals.md](docs/repo_goals.md) explains the project's goals, constraints, and current repo boundary.
+- [meta-docs/repo_goals.md](meta-docs/repo_goals.md) explains the project's goals, constraints, and current repo boundary.
 - [docs/developer.md](docs/developer.md) is the main developer guide, including runtime flow, plan structure, calibration, and testing.
 - [docs/architecture_map.md](docs/architecture_map.md) is the shortest map of the current config, liability, and funding architecture.
 

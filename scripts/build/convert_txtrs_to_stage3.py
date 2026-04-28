@@ -104,7 +104,7 @@ def convert_retiree_distribution():
 def convert_termination_rates():
     """Convert TRS termination rates → lookup_type format.
 
-    TRS has two structures (see docs/termination_rate_design.md):
+    TRS has two structures (see docs/design/termination_rate_design.md):
       - YOS 1-10: rate by years of service
       - YOS 10+: rate by years from normal retirement
     """
