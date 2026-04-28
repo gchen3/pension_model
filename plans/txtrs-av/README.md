@@ -10,7 +10,12 @@ Current state:
 - first-cut AV-built `funding/init_funding.csv` committed
 - first-cut AV-built `demographics/retiree_distribution.csv` committed
   (life annuities only; disabled and survivors deferred — see issue #71)
-- mortality files and `funding/return_scenarios.csv` still pending
+- first-cut AV-built `mortality/base_rates.csv` and
+  `mortality/improvement_scale.csv` committed. Active half is source-direct
+  from SOA Pub-2010(B) Teacher Below-Median Income; retiree half is the
+  documented fallback estimator since the AV-named 2021 TRS healthy-retiree
+  table is not public. See `prep/txtrs-av/reports/first_cut_av_data_batch_05_mortality.md`.
+- `funding/return_scenarios.csv` still pending
 - prep work should build source-supported artifacts here in later passes
 
 Rules:
