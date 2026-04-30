@@ -94,10 +94,6 @@ class PlanConfig:
         return self.raw.get("modeling", {}).get("use_earliest_retire", False)
 
     @property
-    def term_vested_method(self) -> str:
-        return self.raw.get("modeling", {}).get("term_vested_method", "growing_annuity")
-
-    @property
     def male_mp_forward_shift(self) -> int:
         return self.raw.get("modeling", {}).get("male_mp_forward_shift", 0)
 

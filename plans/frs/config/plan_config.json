@@ -317,7 +317,6 @@
 
   "modeling": {
     "use_earliest_retire": false,
-    "term_vested_method": "growing_annuity",
     "male_mp_forward_shift": 0,
     "age_groups": [
       {"max_age": 24, "label": "under_25"},

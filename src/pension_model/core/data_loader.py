@@ -512,4 +512,39 @@ def load_plan_inputs(constants: PlanConfig) -> tuple[PlanConfig, dict]:
             raw_total = raw_inputs_by_class[cn]["_raw_headcount_total"]
         raw_inputs_by_class[cn]["_adjustment_ratio"] = target / raw_total
 
+    # Load current term-vested cashflow stream per class. Constructed in
+    # upstream data prep (see prep/{plan}/methods/term_vested_*.md).
+    # Per-class skip when pvfb_term_current=0 supports the calibration
+    # workflow, where the pipeline runs with neutral calibration before
+    # the per-class PVFBs are derived. float_precision='round_trip' on
+    # read is required to preserve bit-identical match against R-baseline
+    # truth tables.
+    data_dir = constants.resolve_data_dir()
+    cashflow_path = data_dir / "funding" / "current_term_vested_cashflow.csv"
+    cashflow_df = (
+        pd.read_csv(cashflow_path, float_precision="round_trip")
+        if cashflow_path.exists()
+        else None
+    )
+    for cn in classes:
+        pvfb = constants.class_data[cn].pvfb_term_current
+        if pvfb == 0 or cashflow_df is None:
+            raw_inputs_by_class[cn]["term_vested_cashflow"] = np.zeros(0)
+            continue
+        cn_rows = cashflow_df[cashflow_df["class_name"] == cn].sort_values("year_offset")
+        stream = cn_rows["payment"].to_numpy()
+        raw_inputs_by_class[cn]["term_vested_cashflow"] = stream
+        if len(stream) > 0:
+            baseline_rate = constants.baseline_dr_current
+            npv = float(np.sum(stream / (1.0 + baseline_rate) ** np.arange(1, len(stream) + 1)))
+            rel_err = abs(npv - pvfb) / abs(pvfb)
+            if rel_err > 1e-10:
+                raise ValueError(
+                    f"Plan '{constants.plan_name}' class '{cn}': term-vested "
+                    f"cashflow NPV {npv:.6e} at baseline rate "
+                    f"{baseline_rate} differs from pvfb_term_current "
+                    f"{pvfb:.6e} (rel err {rel_err:.2e}). Re-run the plan's "
+                    f"term-vested build script after calibration changes."
+                )
+
     return constants, raw_inputs_by_class

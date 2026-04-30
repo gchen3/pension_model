@@ -290,7 +290,8 @@ def _build_current_liability_tables(
             constants,
         ),
         "current_term_vested_liability": compute_current_term_vested_liability(
-            class_name,
+            class_inputs.get("term_vested_cashflow", np.zeros(0)),
+            class_data.pvfb_term_current,
             constants,
         ),
     }
