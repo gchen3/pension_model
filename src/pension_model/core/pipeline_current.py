@@ -137,66 +137,64 @@ def compute_current_retiree_liability(
     ).reset_index()
 
 
-def compute_current_term_vested_liability(class_name: str, constants) -> pd.DataFrame:
-    """
-    Compute current term vested AAL (R liability model lines 238-248 / 286-310).
+def compute_current_term_vested_liability(
+    cashflow_stream: np.ndarray,
+    pvfb_term_current: float,
+    constants,
+) -> pd.DataFrame:
+    """Project current term-vested AAL year-by-year from a pre-built cashflow stream.
 
-    Method is config-driven via ``funding.term_vested_method``:
-      - "growing_annuity": amortizes pvfb_term_current as a growing payment stream
-      - "bell_curve": uses normal distribution weighting of payments
+    The stream is constructed in upstream data prep (see
+    ``prep/{plan}/methods/term_vested_*.md``) and read from
+    ``plans/{plan}/data/funding/current_term_vested_cashflow.csv`` at
+    plan-load time. The runtime is method-agnostic: it just discounts
+    whatever per-year payments it gets at the scenario discount rate.
+
+    Args:
+        cashflow_stream: per-year payments at year_offset 1..N (length
+            depends on the per-plan method; e.g. 50 for FRS legacy,
+            D+L for the deferred-annuity method). Empty array when the
+            CSV is missing — supported during calibration where
+            pvfb_term_current is 0.
+        pvfb_term_current: per-class PVFB at baseline rate (the input
+            against which the stream was calibrated). Used here only
+            to detect the calibration-time "no stream and no PVFB"
+            case.
+        constants: PlanConfig.
     """
     ranges = constants.ranges
-    class_data = constants.class_data[class_name]
-
-    pvfb_term_current = class_data.pvfb_term_current
-    # The synthetic payment stream is sized at the rate the input PVFB
-    # was published at (baseline dr_current); the resulting stream is
-    # then PV'd at the scenario dr_current. See docs/design/discount_rate_scenarios.md.
-    cashflow_rate = constants.economic.baseline_dr_current
     valuation_rate = constants.economic.dr_current
-    payroll_growth = constants.economic.payroll_growth
-    amo_period = constants.funding.amo_period_term
-    years = list(range(ranges.start_year, ranges.start_year + ranges.model_period + 1))
+    n_years = ranges.model_period + 1
+    years = list(range(ranges.start_year, ranges.start_year + n_years))
 
-    if constants.term_vested_method == "bell_curve":
-        mid = amo_period / 2
-        spread = amo_period / 5
-        amo_seq = np.arange(1, amo_period + 1)
-        amo_weights = (1 / (spread * np.sqrt(2 * np.pi))) * np.exp(
-            -0.5 * ((amo_seq - mid) / spread) ** 2
+    if len(cashflow_stream) == 0:
+        if pvfb_term_current != 0:
+            raise FileNotFoundError(
+                "No term-vested cashflow stream available, but "
+                f"pvfb_term_current={pvfb_term_current}. Run the plan's "
+                "term-vested cashflow build script "
+                "(scripts/build/build_*_term_vested_cashflow.py) to "
+                "generate the per-plan "
+                "data/funding/current_term_vested_cashflow.csv."
+            )
+        return pd.DataFrame(
+            {
+                "year": years,
+                "retire_ben_term_est": np.zeros(n_years),
+                "aal_term_current_est": np.zeros(n_years),
+            }
         )
-        ann_ratio = amo_weights / amo_weights[0]
 
-        first_payment = pvfb_term_current / _npv(cashflow_rate, ann_ratio)
-        term_payments = first_payment * ann_ratio
-        full_stream = np.concatenate(([0.0], term_payments))
-        full_aal = _roll_npv(valuation_rate, full_stream)
+    full_stream = np.concatenate(([0.0], np.asarray(cashflow_stream, dtype=float)))
 
-        retire_ben_term_est = np.zeros(len(years))
-        aal_term_current = np.zeros(len(years))
-        for i in range(len(years)):
-            if i < len(full_stream):
-                retire_ben_term_est[i] = full_stream[i]
-            if i < len(full_aal):
-                aal_term_current[i] = full_aal[i]
-    else:
-        retire_ben_term = _get_pmt(cashflow_rate, payroll_growth, amo_period, pvfb_term_current, t=1)
-        amo_years = list(range(ranges.start_year + 1, ranges.start_year + 1 + amo_period))
-        retire_ben_term_est = np.zeros(len(years))
-        term_payments = _recur_grow3(retire_ben_term, payroll_growth, amo_period)
-        for i, year in enumerate(years):
-            if year in amo_years:
-                idx = year - (ranges.start_year + 1)
-                if idx < len(term_payments):
-                    retire_ben_term_est[i] = term_payments[idx]
+    retire_ben_term_est = np.zeros(n_years)
+    take = min(len(full_stream), n_years)
+    retire_ben_term_est[:take] = full_stream[:take]
 
-        aal_term_current = _roll_pv(
-            valuation_rate,
-            payroll_growth,
-            amo_period,
-            retire_ben_term_est,
-            t=1,
-        )
+    aal_full = _roll_npv(valuation_rate, full_stream)
+    aal_term_current = np.zeros(n_years)
+    take_aal = min(len(aal_full), n_years)
+    aal_term_current[:take_aal] = aal_full[:take_aal]
 
     return pd.DataFrame(
         {

@@ -257,7 +257,6 @@
     "scope_rule": "This file is built from valuation-supported plan shape and valuation-linked runtime needs, not by copying txtrs runtime semantics wholesale.",
     "omitted_runtime_legacy_fields": [
       "retire_refund_ratio",
-      "term_vested_method",
       "use_earliest_retire",
       "cash_balance",
       "dc",
