@@ -86,6 +86,13 @@
     "max_yos": 70
   },
 
+  "term_vested": {
+    "avg_deferral_years": 12,
+    "avg_payout_years": 25,
+    "method": "deferred_annuity",
+    "notes": "Parameters for the shared deferred-annuity term-vested cashflow method. avg_deferral_years approximates the gap between average current age of term-vested members and the assumed distribution age; avg_payout_years approximates remaining life expectancy at the distribution age. Initial values are reasonable defaults; refine from valuation demographics when available. Used only by data prep (scripts/build/build_av_term_vested_cashflow.py) to produce data/funding/current_term_vested_cashflow.csv; the runtime reads the CSV and does not consult this section."
+  },
+
   "classes": ["all"],
 
   "class_groups": {

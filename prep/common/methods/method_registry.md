@@ -399,6 +399,97 @@ Recommended method statuses:
   - additional plan-specific source acquisition may still be required before a
     source-faithful build is possible
 
+### `term_vested_deferred_annuity_v1`
+
+- Status: `candidate`
+- Type: `documented estimation`
+- Purpose: Estimate the year-by-year benefit cashflow stream for the
+  current term-vested cohort when only a rolled-up `pvfb_term_current`
+  is published. Used by AV-first plans and any new plan; not used by
+  the legacy R-anchored FRS or TXTRS pipelines.
+- Inputs:
+  - `pvfb_term_current` per class (calibration.json)
+  - `economic.dr_current` (baseline rate)
+  - `benefit.cola.current_retire`
+  - `term_vested.avg_deferral_years` (`D`)
+  - `term_vested.avg_payout_years` (`L`)
+- Outputs:
+  - `plans/{plan}/data/funding/current_term_vested_cashflow.csv`
+- Core rule:
+  - zero payments for years `1..D`
+  - level-times-COLA payments for years `D+1..D+L`
+  - calibrate scalar so NPV at `dr_current` equals `pvfb_term_current`
+  - closed form, no per-year iteration
+- Validation:
+  - NPV at baseline rate equals `pvfb_term_current` to floating-point
+    precision (build script asserts; verify script re-checks)
+- Confirmed examples:
+  - txtrs-av (D=12, L=25, cola=0)
+- Full spec: [term_vested_deferred_annuity.md](term_vested_deferred_annuity.md)
+- Limits:
+  - single-scalar `L` averages over all members; refinement to a
+    survival-weighted annuity factor at the assumed distribution age
+    is the next iteration
+  - first-cut `D` and `L` are reasonable defaults; tune from valuation
+    term-vested demographics when reviewed
+
+### `term_vested_growing_annuity_frs_v1`
+
+- Status: `legacy_only`
+- Type: `legacy reconstruction`
+- Purpose: Reproduce the FRS R model's growing-annuity construction
+  for the current term-vested cohort, so the Python runtime's FRS
+  truth tables are unchanged when the runtime stops constructing the
+  stream in the year loop.
+- Inputs:
+  - `pvfb_term_current` per class
+  - `economic.dr_current`, `economic.payroll_growth`,
+    `funding.amo_period_term`
+- Outputs:
+  - `plans/frs/data/funding/current_term_vested_cashflow.csv`
+- Core rule:
+  - level-percent-of-payroll first payment from R `get_pmt`
+  - subsequent payments grow at `payroll_growth`
+  - 50-year stream
+- Validation:
+  - NPV at baseline rate equals `pvfb_term_current`
+  - bit-identical to the runtime's current in-pipeline construction
+- Plan scope: FRS only. Not recommended for new plans; use
+  `term_vested_deferred_annuity_v1` instead.
+- Full spec: [`prep/frs/methods/term_vested_growing_annuity.md`](../../frs/methods/term_vested_growing_annuity.md)
+- Limits:
+  - no deferral period — understates duration
+  - level-percent-of-payroll is a smoothing pattern, not actuarial
+    cashflow
+
+### `term_vested_bell_curve_txtrs_v1`
+
+- Status: `legacy_only`
+- Type: `legacy reconstruction`
+- Purpose: Reproduce the TXTRS R model's bell-curve construction for
+  the current term-vested cohort, so the Python runtime's TXTRS truth
+  tables are unchanged when the runtime stops constructing the stream
+  in the year loop.
+- Inputs:
+  - `pvfb_term_current`
+  - `economic.dr_current`, `funding.amo_period_term`
+- Outputs:
+  - `plans/txtrs/data/funding/current_term_vested_cashflow.csv`
+- Core rule:
+  - normal-distribution weights `N(t; amo_period/2, amo_period/5)` over
+    50 years
+  - first payment calibrated so NPV at baseline rate equals
+    `pvfb_term_current`
+- Validation:
+  - NPV at baseline rate equals `pvfb_term_current`
+  - bit-identical to the runtime's current in-pipeline construction
+- Plan scope: TXTRS only. Not recommended for new plans; use
+  `term_vested_deferred_annuity_v1` instead.
+- Full spec: [`prep/txtrs/methods/term_vested_bell_curve.md`](../../txtrs/methods/term_vested_bell_curve.md)
+- Limits:
+  - bell-curve symmetry has no actuarial basis
+  - peak at year 25 of a 50-year window is a stylized R convention
+
 ## Method Design Guidance
 
 When adding a new method:
