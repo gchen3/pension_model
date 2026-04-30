@@ -315,10 +315,22 @@ Closes the AAL gap: `pvfb_term_current = AV_AAL - model_AAL`. This liability com
 ### Running Calibration
 
 ```bash
-pension-model calibrate frs              # compute and print diagnostics
-pension-model calibrate frs --write      # write to plans/frs/config/calibration.json
+pension-model calibrate frs              # compute and print diagnostics (no write)
+make calibrate plan=frs                  # write calibration.json AND rebuild that
+                                         # plan's term-vested cashflow CSV in one
+                                         # step (preferred — see note below)
 pension-model run frs                    # verify output and tests pass
 ```
+
+**Why prefer `make calibrate` over `pension-model calibrate --write`:** the
+runtime reads the per-class term-vested benefit cashflow stream from
+`plans/{plan}/data/funding/current_term_vested_cashflow.csv`, which is
+generated from `pvfb_term_current` in `calibration.json`. When calibration
+writes new `pvfb_term_current` values, the CSV must be regenerated to match.
+The Make target does both. Doing them separately is fine but easy to forget;
+the runtime's input-load identity check (NPV at baseline rate ≈
+`pvfb_term_current`) will trip if the CSV is stale and point at the build
+script to fix.
 
 Calibration output includes:
 - **Normal cost calibration table**: model NC vs AV NC, nc_cal factor, flags for outliers
@@ -484,6 +496,23 @@ pytest tests/ -k "calibration" -v        # filter by name
 pension-model run frs                    # runs model + tests automatically
 pension-model run frs --test-only        # tests only, no model run
 ```
+
+The repo also has a `Makefile` that bundles common workflows. `make help` lists
+all targets. The most useful ones:
+
+```bash
+make r-match                             # FRS/TXTRS R-baseline scenario tests
+make verify-cashflows                    # term-vested CSV identity check
+make calibrate plan=frs                  # calibrate + rebuild that plan's term-vested CSV
+make run plan=txtrs scenario=baseline    # run one cell, append rows to output/all_runs.csv
+make run-all                             # run every (plan, scenario) cell
+make compare a=txtrs/baseline b=txtrs-av/baseline
+                                         # pairwise long-format diff between two cells
+```
+
+The compare target writes `output/compare_<a>__vs__<b>.csv` (long format) and
+prints a per-metric summary. Works for any pair — across plans, across
+scenarios, or both.
 
 For the proposed long-run taxonomy, retention rules, and run-profile model,
 see [testing_strategy.md](testing_strategy.md). The current suite still mixes
