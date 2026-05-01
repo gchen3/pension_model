@@ -1,0 +1,13 @@
+check_id,check_layer,check_name,artifact_scope,applies_to,expected_status,owner,notes
+ST-004,source_table,Monetary scaling is explicit,source_table,"AV_2022 tables in thousands; ACFR monetary tables as published",pass,prep,"FRS valuation liability and benefit tables often publish amounts in thousands."
+CT-001,cross_table,Active headcount reconciles to reported total,plan,"AV Appendix C DB counts; ACFR active-member tables",pass,prep,"Compare only after matching scope and year."
+CT-002,cross_table,Payroll reconciles to reported total,plan,"ACFR payroll tables; built salary/headcount artifacts; valuation payroll context",pass,prep,"DB-only versus system-wide payroll must be distinguished."
+CT-005,cross_table,Class totals reconcile to plan total,plan,"FRS class artifacts and class totals in AV/ACFR",pass,prep,"Important for payroll, AAL, and annuitant totals."
+CT-006,cross_table,AV-versus-ACFR comparison is documented,plan,"FRS AV_2022 vs ACFR_2023",pass,prep,"Differences are expected in some cases and should be explained, not suppressed."
+CT-007,cross_table,Source-year alignment is explicit,plan,"valuation_inputs and baseline-linked config values",pass,prep,"Current config uses the 2022 ACFR column for some values even though 2023 is present."
+CA-005,canonical_artifact,Units match canonical contract,artifact,"plans/frs/data/** and source-linked config values",pass,prep,"Money in dollars, rates in decimals, counts unscaled."
+CA-007,canonical_artifact,Provenance metadata complete enough for review,artifact,"prep/frs/artifact_provenance.csv and related reviewed artifacts",pass,prep,"Artifact-level provenance is the default."
+CA-008,canonical_artifact,Printed versus PDF page references are distinguished,artifact,"prep/frs/artifact_provenance.csv and related reviewed artifacts",pass,prep,"Printed pages are primary human-facing citations; PDF pages should be added when practical."
+CA-009,canonical_artifact,Legacy unresolved items are separated from new estimations,artifact,"prep/frs/artifact_provenance.csv and related reports",pass,prep,"Reason-era unresolved reconstruction should not be conflated with new-plan estimation methods."
+RE-001,runtime_equivalence,Exact file equivalence,artifact,"Generated FRS runtime artifacts versus plans/frs/**",pass,prep,"Primary pilot acceptance criterion."
+RE-003,runtime_equivalence,Canonical config equivalence,artifact,"Source-linked portions of plans/frs/config/plan_config.json",pass,prep,"Runtime-only fields should be separated logically in the comparison."

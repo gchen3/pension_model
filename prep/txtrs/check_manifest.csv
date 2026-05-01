@@ -1,0 +1,13 @@
+check_id,check_layer,check_name,artifact_scope,applies_to,expected_status,owner,notes
+ST-004,source_table,Monetary scaling is explicit,source_table,"AV_2024 and ACFR_2023 monetary tables",pass,prep,"Canonical outputs must remain in dollars."
+CT-001,cross_table,Active headcount reconciles to reported total,plan,"ACFR active counts; built all_headcount artifact",pass,prep,"Current runtime scope may differ from a single headline count, so reconciliation logic must be explicit."
+CT-003,cross_table,Retiree count reconciles to reported total,plan,"ACFR retirement-recipient totals; built retiree distribution",pass,prep,"Likely scope issue for current config retiree population."
+CT-004,cross_table,Benefit payments reconcile to reported totals,plan,"AV/ACFR benefit payments; built retiree distribution and init_funding",pass,prep,"Benefit-payment totals are a key funding anchor."
+CT-006,cross_table,AV-versus-ACFR comparison is documented,plan,"TXTRS AV_2024 vs ACFR_2023",pass,prep,"Differences in year and measurement basis should be explained."
+CA-005,canonical_artifact,Units match canonical contract,artifact,"plans/txtrs/data/** and source-linked config values",pass,prep,"Money in dollars, rates in decimals, counts unscaled."
+CA-007,canonical_artifact,Provenance metadata complete enough for review,artifact,"prep/txtrs/artifact_provenance.csv and related reviewed artifacts",pass,prep,"Artifact-level provenance is the default."
+CA-008,canonical_artifact,Printed versus PDF page references are distinguished,artifact,"prep/txtrs/artifact_provenance.csv and related reviewed artifacts",pass,prep,"Printed pages are primary human-facing citations; PDF pages should be added when practical."
+CA-009,canonical_artifact,Legacy unresolved items are separated from new estimations,artifact,"prep/txtrs/artifact_provenance.csv and related reports",pass,prep,"Reason-era unresolved reconstruction should not be conflated with new-plan estimation methods."
+RE-001,runtime_equivalence,Exact file equivalence,artifact,"Generated TXTRS runtime artifacts versus plans/txtrs/**",pass,prep,"Primary pilot acceptance criterion."
+RE-003,runtime_equivalence,Canonical config equivalence,artifact,"Source-linked portions of plans/txtrs/config/plan_config.json",pass,prep,"Runtime-only fields such as generalized benefit-types should be separated logically in the comparison."
+RE-004,runtime_equivalence,Coverage gaps explicitly listed,plan,"TXTRS entrant profile, mortality tables, and any demographic-grid gaps",pass,prep,"Gap visibility is part of the pilot success criteria."

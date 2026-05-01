@@ -34,6 +34,9 @@ __MACOSX/
 !plans/**/*.csv
 !plans/**/*.json
 
+# ── Prep: track all prep artifacts (provenance, registries, checklists) ──
+!prep/**/*.csv
+
 # Memory bank (local notes, not for git)
 memory-bank/
 

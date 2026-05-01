@@ -1,0 +1,12 @@
+check_id,check_layer,check_name,artifact_scope,applies_to,expected_status,owner,notes
+ST-004,source_table,Monetary scaling is explicit,source_table,"AV_2024 monetary tables",pass,prep,"Canonical artifacts must store money in dollars."
+CT-001,cross_table,Active headcount reconciles to reported total,plan,"AV Table 2 active contributing members not in DROP; built all_headcount artifact",pass,prep,"First-cut TXTRS-AV should reconcile to the valuation participant scope."
+CT-002,cross_table,Payroll reconciles to reported total,plan,"AV Table 3b covered payroll; built funding and salary artifacts",pass,prep,"Covered payroll should stay aligned to the valuation basis."
+CT-003,cross_table,Retiree count reconciles to reported total,plan,"AV Table 2 retired members and beneficiaries; built retiree distribution",pass,prep,"If the first cut uses a proxy retiree distribution, the scope gap must be explicit."
+CT-004,cross_table,Benefit payments reconcile to reported totals,plan,"AV Table 8a benefit payments; built init_funding and retiree distribution artifacts",pass,prep,"Observed-year benefit-payment treatment should stay AV-first."
+CA-005,canonical_artifact,Units match canonical contract,artifact,"plans/txtrs-av/data/** and source-linked config values",pass,prep,"Money in dollars, rates in decimals, counts unscaled."
+CA-007,canonical_artifact,Provenance metadata complete enough for review,artifact,"prep/txtrs-av/artifact_provenance.csv and reviewed reports",pass,prep,"Artifact-level provenance is required as runtime artifacts are built."
+CA-008,canonical_artifact,Printed versus PDF page references are distinguished,artifact,"prep/txtrs-av/reports/** and artifact provenance",pass,prep,"Printed pages are primary citations; PDF pages support extraction."
+CA-009,canonical_artifact,Legacy unresolved items are separated from new estimations,artifact,"prep/txtrs-av/reports/** and artifact provenance",pass,prep,"Do not inherit unresolved TXTRS compatibility paths as if they were source-direct."
+RE-004,runtime_equivalence,Coverage gaps explicitly listed,plan,"TXTRS-AV first-cut intake package",pass,prep,"The first-cut plan must list what remains unresolved or intentionally deferred."
+ER-001,external_reference,Reference source hash recorded,common_reference,"Any AV-referenced external mortality tables or scales added later",pass,prep,"This will matter when plan-specific mortality sources are acquired."
