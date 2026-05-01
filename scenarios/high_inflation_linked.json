@@ -1,0 +1,16 @@
+{
+  "name": "high_inflation_linked",
+  "description": "Linked high inflation scenario: inflation and linked nominal economic assumptions increase by 3 percentage points while fixed or statutory COLAs remain unchanged.",
+  "relative_overrides": {
+    "economic": {
+      "inflation": 0.03,
+      "payroll_growth": 0.03,
+      "model_return": 0.03,
+      "dr_current": 0.03,
+      "dr_new": 0.03
+    },
+    "funding": {
+      "amo_pay_growth": 0.03
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "asset_shock",
+  "description": "Asset return path: current plan investment return, 3%, -24%, 12%, 12%, 12%, then current plan investment return annually",
+  "overrides": {
+    "economic": {
+      "return_scen": "asset_shock",
+      "asset_return_path": ["model_return", 0.03, -0.24, 0.12, 0.12, 0.12],
+      "asset_return_terminal": "model_return"
+    }
+  }
+}

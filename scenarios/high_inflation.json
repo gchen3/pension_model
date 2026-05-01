@@ -1,0 +1,9 @@
+{
+  "name": "high_inflation",
+  "description": "High inflation sensitivity: baseline inflation plus 3 percentage points for all projection years",
+  "relative_overrides": {
+    "economic": {
+      "inflation": 0.03
+    }
+  }
+}
