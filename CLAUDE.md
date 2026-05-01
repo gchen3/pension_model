@@ -6,6 +6,7 @@ This is a Python pension simulation model. Three project-level reference docs ap
 - **[`meta-docs/pension_math.md`](meta-docs/pension_math.md)** — actuarial math reference. Many model operations have closed-form or recursive shortcuts (commutation functions, annuity factors); many current implementations are approximations with known limits and tracked issues. When proposing a change, ask whether the math can simplify or accelerate it before reaching for ad-hoc code.
 - **[`meta-docs/workflow.md`](meta-docs/workflow.md)** — how to update these meta files. Meta-doc edits go on their own short-lived branch with a PR, never bundled with feature work, never directly to main. Same workflow as feature work but separated.
 - **[`meta-docs/writing_style.md`](meta-docs/writing_style.md)** — plain-English writing rules for docs, PR descriptions, issue and PR comments, and end-of-task summaries. Default to plain English; translate jargon; cut dead words.
+- **[`meta-docs/data_prep_goals.md`](meta-docs/data_prep_goals.md)** — goals and rules for preparing a plan's runtime inputs from source documents. AV-first; never copy values from a legacy plan; provenance for every value via `prep/{plan}/input_checklist.csv`. Read before any data-prep work.
 
 ## Quick rules
 
