@@ -49,6 +49,29 @@ def _phase_benefits_refunds(f: pd.DataFrame, liab: pd.DataFrame, i: int, ctx: Fu
 
 def _prepare_return_scenarios(ctx: FundingContext, dr_current: float) -> pd.DataFrame:
     rs = ctx.ret_scen
+    return_path = ctx.raw_economic.get("asset_return_path")
+    return_terminal = ctx.raw_economic.get("asset_return_terminal")
+
+    def _resolve_return(value):
+        if value == "model_return":
+            return ctx.model_return
+        return value
+
+    if ctx.return_scen_col == "asset_shock":
+        if return_path is None or return_terminal is None:
+            raise ValueError(
+                "economic.asset_return_path and economic.asset_return_terminal "
+                "are required when return_scen is 'asset_shock'."
+            )
+        resolved_path = [_resolve_return(value) for value in return_path]
+        resolved_terminal = _resolve_return(return_terminal)
+        first_year = ctx.start_year + 1
+        rs["asset_shock"] = [
+            resolved_path[year - first_year]
+            if 0 <= year - first_year < len(resolved_path)
+            else resolved_terminal
+            for year in rs["year"]
+        ]
     if ctx.ava_strategy.ret_scen_gates_projection:
         first_proj_year = ctx.start_year + 2
         mask = rs["year"] >= first_proj_year

@@ -3,6 +3,7 @@
 #
 # Usage (from project root):
 #   cd R_model/R_model_txtrs
+#   Rscript ../../scripts/run/run_r_scenario_txtrs.R baseline
 #   Rscript ../../scripts/run/run_r_scenario_txtrs.R <scenario_name>
 #
 # Mirrors scripts/run/run_r_scenario.R (FRS) but drives the TxTRS R model.
@@ -43,7 +44,10 @@ source("TxTRS_liability_model.R")
 source("TxTRS_funding_model.R")
 
 # Define scenario overrides
-if (scenario_name == "high_discount") {
+if (scenario_name == "baseline") {
+  cat("Running baseline scenario: no overrides\n")
+  funding <- get_funding_data()
+} else if (scenario_name == "high_discount") {
   cat("Running high_discount scenario: dr_current=dr_new=model_return=0.075\n")
   funding <- get_funding_data(
     dr_current = 0.075,
@@ -55,6 +59,32 @@ if (scenario_name == "high_discount") {
   funding <- get_funding_data(
     return_scen = "model",
     model_return = 0.05
+  )
+} else if (scenario_name == "asset_shock") {
+  cat("Running asset_shock scenario: returns current plan investment return, 3%, -24%, 12%, 12%, 12%, then current plan investment return\n")
+  first_proj_year <- YearStart + 1
+  return_path <- c(model_return_, 0.03, -0.24, 0.12, 0.12, 0.12)
+  shock_mask <- return_scenarios$year >= first_proj_year &
+    return_scenarios$year < first_proj_year + length(return_path)
+  return_scenarios$asset_shock <- model_return_
+  return_scenarios$asset_shock[shock_mask] <-
+    return_path[return_scenarios$year[shock_mask] - first_proj_year + 1]
+  funding <- get_funding_data(
+    return_scen = "asset_shock"
+  )
+} else if (scenario_name == "high_inflation") {
+  cat("Running high_inflation scenario: inflation = baseline inflation + 0.03\n")
+  inf_rate <- inf_rate + 0.03
+  funding <- get_funding_data()
+} else if (scenario_name == "high_inflation_linked") {
+  cat("Running high_inflation_linked scenario: inflation, payroll growth, discount rates, model return, and amortization growth = baseline + 0.03\n")
+  inf_rate <- inf_rate + 0.03
+  payroll_growth_ <- payroll_growth_ + 0.03
+  funding <- get_funding_data(
+    dr_current = dr_current_ + 0.03,
+    dr_new = dr_new_ + 0.03,
+    model_return = model_return_ + 0.03,
+    amo_pay_growth = amo_pay_growth_ + 0.03
   )
 } else if (scenario_name == "no_cola") {
   cat("Running no_cola scenario: all COLA = 0\n")
@@ -114,13 +144,21 @@ invest_income <- c(
   0
 )
 
-# n_active is not in funding_data; pull from existing TXTRS baseline if available.
+# n_active and some year-0 contribution components are not fully populated in
+# funding_data; pull reviewed values from the existing TXTRS baseline when
+# available so the comparison surface stays complete.
 baseline_ref_path <- "../../plans/txtrs/baselines/r_truth_table.csv"
 n_active <- rep(NA, length(mva))
 if (file.exists(baseline_ref_path)) {
   baseline_ref <- read.csv(baseline_ref_path)
   if ("n_active_boy" %in% names(baseline_ref) && nrow(baseline_ref) == length(mva)) {
     n_active <- baseline_ref$n_active_boy
+  }
+  if ("ee_cont" %in% names(baseline_ref) && nrow(baseline_ref) == length(ee)) {
+    ee[is.na(ee)] <- baseline_ref$ee_cont[is.na(ee)]
+  }
+  if ("er_db_cont" %in% names(baseline_ref) && nrow(baseline_ref) == length(er_db)) {
+    er_db[is.na(er_db)] <- baseline_ref$er_db_cont[is.na(er_db)]
   }
 }
 
@@ -145,6 +183,11 @@ truth <- data.frame(
 )
 
 out_dir <- file.path("../../plans/txtrs/baselines")
-out_path <- file.path(out_dir, paste0("r_truth_table_", scenario_name, ".csv"))
+out_file <- if (scenario_name == "baseline") {
+  "r_truth_table.csv"
+} else {
+  paste0("r_truth_table_", scenario_name, ".csv")
+}
+out_path <- file.path(out_dir, out_file)
 write.csv(truth, out_path, row.names = FALSE)
 cat("Wrote", out_path, "\n")

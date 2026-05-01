@@ -21,6 +21,50 @@ import numpy as np
 from pension_model.config_schema import PlanConfig
 
 
+def _build_return_scenario(constants: PlanConfig) -> pd.Series | None:
+    """Build the selected year-indexed return scenario for liability stages."""
+    return_scen_col = constants.return_scen_col
+    if return_scen_col in {"model", "assumption"}:
+        return None
+
+    data_dir = constants.resolve_data_dir()
+    path = data_dir / "funding" / "return_scenarios.csv"
+    if not path.exists():
+        return None
+
+    rs = pd.read_csv(path)
+    if return_scen_col == "asset_shock":
+        econ = constants.raw.get("economic", {})
+        return_path = econ.get("asset_return_path")
+        return_terminal = econ.get("asset_return_terminal")
+
+        def _resolve_return(value):
+            if value == "model_return":
+                return constants.model_return
+            return value
+
+        if return_path is None or return_terminal is None:
+            raise ValueError(
+                "economic.asset_return_path and economic.asset_return_terminal "
+                "are required when return_scen is 'asset_shock'."
+            )
+        resolved_path = [_resolve_return(value) for value in return_path]
+        resolved_terminal = _resolve_return(return_terminal)
+        first_year = constants.start_year + 1
+        rs["asset_shock"] = [
+            resolved_path[year - first_year]
+            if 0 <= year - first_year < len(resolved_path)
+            else resolved_terminal
+            for year in rs["year"]
+        ]
+
+    if return_scen_col not in rs.columns:
+        raise ValueError(
+            f"Return scenario column {return_scen_col!r} not found in {path}."
+        )
+    return pd.Series(rs[return_scen_col].to_numpy(), index=rs["year"].to_numpy())
+
+
 def _load_retiree_distribution(path: Path) -> pd.DataFrame:
     """Load retiree distribution with computed ratio columns.
 
@@ -546,5 +590,10 @@ def load_plan_inputs(constants: PlanConfig) -> tuple[PlanConfig, dict]:
                     f"{pvfb:.6e} (rel err {rel_err:.2e}). Re-run the plan's "
                     f"term-vested build script after calibration changes."
                 )
+
+    return_scenario = _build_return_scenario(constants)
+    if return_scenario is not None:
+        for cn in classes:
+            raw_inputs_by_class[cn]["_return_scenario"] = return_scenario
 
     return constants, raw_inputs_by_class

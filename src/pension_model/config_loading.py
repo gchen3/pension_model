@@ -26,6 +26,22 @@ def _deep_merge(base: dict, overrides: dict) -> dict:
     return result
 
 
+def _deep_add(base: dict, additions: dict) -> dict:
+    """Recursively add numeric scenario deltas into a config dict."""
+    result = dict(base)
+    for key, val in additions.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_add(result[key], val)
+        elif key in result and isinstance(result[key], (int, float)) and isinstance(val, (int, float)):
+            result[key] = result[key] + val
+        else:
+            raise ValueError(
+                f"Cannot apply relative scenario override for {key!r}; "
+                "target must already exist and both values must be numeric."
+            )
+    return result
+
+
 def _build_class_to_group(raw: dict) -> Dict[str, str]:
     """Build class-to-group lookup from ``class_groups`` config."""
     class_to_group: Dict[str, str] = {}
@@ -91,6 +107,7 @@ def load_plan_config(
             scenario = json.load(f)
         scenario_name = scenario.get("name", scenario_path.stem)
         raw = _deep_merge(raw, scenario.get("overrides", {}))
+        raw = _deep_add(raw, scenario.get("relative_overrides", {}))
 
     if scenario_name:
         raw["_scenario_name"] = scenario_name

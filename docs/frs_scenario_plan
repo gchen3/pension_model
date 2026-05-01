@@ -1,0 +1,115 @@
+# FRS Scenario Plan
+
+## Purpose
+
+This plan describes how to implement the new scenarios in the FRS R workflow and
+the FRS Python workflow, then confirm that both workflows produce the same FRS
+results.
+
+This file carries the FRS-specific work that was previously Step 4 and Step 5 in
+the main scenario testing plan.
+
+## Prerequisites
+
+Before starting this plan:
+
+- baseline FRS R and Python results should already match
+- existing FRS scenarios should already match between R and Python
+- `asset_shock`, `high_inflation`, and `high_inflation_linked` should be
+  finalized in
+  [`scenario_building_plan`](scenario_building_plan)
+- numeric comparison tolerances should be agreed before reconciliation
+
+## FRS Scenarios Covered
+
+- baseline
+- `high_discount`
+- `low_return`
+- `no_cola`
+- `asset_shock`
+- `high_inflation`
+- `high_inflation_linked`
+
+## Implement New FRS Scenarios
+
+Implementation tasks:
+
+1. Add `asset_shock` to the FRS R scenario workflow.
+2. Add `asset_shock` to the FRS Python scenario workflow.
+3. Add `high_inflation` to the FRS R scenario workflow.
+4. Add `high_inflation` to the FRS Python scenario workflow.
+5. Add `high_inflation_linked` to the FRS R scenario workflow.
+6. Add `high_inflation_linked` to the FRS Python scenario workflow.
+7. Confirm that both FRS workflows expose the new scenarios through their normal
+   scenario-running commands.
+8. Confirm that both FRS workflows write outputs to predictable
+   scenario-specific locations.
+
+Acceptance criteria:
+
+- The FRS R workflow can run `asset_shock`.
+- The FRS Python workflow can run `asset_shock`.
+- The FRS R workflow can run `high_inflation`.
+- The FRS Python workflow can run `high_inflation`.
+- The FRS R workflow can run `high_inflation_linked`.
+- The FRS Python workflow can run `high_inflation_linked`.
+- Both workflows use the same scenario definitions and timing.
+
+## Run FRS Scenario Comparisons
+
+Comparison tasks:
+
+1. Run baseline in R for FRS.
+2. Run baseline in Python for FRS.
+3. Compare baseline FRS outputs.
+4. Run `high_discount` in R for FRS.
+5. Run `high_discount` in Python for FRS.
+6. Compare FRS `high_discount` outputs.
+7. Run `low_return` in R for FRS.
+8. Run `low_return` in Python for FRS.
+9. Compare FRS `low_return` outputs.
+10. Run `no_cola` in R for FRS.
+11. Run `no_cola` in Python for FRS.
+12. Compare FRS `no_cola` outputs.
+13. Run `asset_shock` in R for FRS.
+14. Run `asset_shock` in Python for FRS.
+15. Compare FRS `asset_shock` outputs.
+16. Run `high_inflation` in R for FRS.
+17. Run `high_inflation` in Python for FRS.
+18. Compare FRS `high_inflation` outputs.
+19. Run `high_inflation_linked` in R for FRS.
+20. Run `high_inflation_linked` in Python for FRS.
+21. Compare FRS `high_inflation_linked` outputs.
+
+## FRS Reconciliation Matrix
+
+Prepare a reconciliation matrix with one row per FRS scenario.
+
+Required matrix columns:
+
+- plan
+- scenario
+- R output location
+- Python output location
+- comparison status
+- maximum absolute difference
+- maximum percentage difference, where meaningful
+- affected output field, if any difference exceeds tolerance
+- resolution notes
+
+Required rows:
+
+- FRS baseline
+- FRS `high_discount`
+- FRS `low_return`
+- FRS `no_cola`
+- FRS `asset_shock`
+- FRS `high_inflation`
+- FRS `high_inflation_linked`
+
+## Final FRS Acceptance Criteria
+
+- Every FRS scenario comparison passes.
+- Any FRS difference is resolved or documented with an approved tolerance.
+- The FRS reconciliation matrix clearly shows that R and Python results are the
+  same across baseline, existing scenarios, and new scenarios.

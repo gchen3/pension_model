@@ -1,0 +1,115 @@
+# TXTRS Scenario Plan
+
+## Purpose
+
+This plan describes how to implement the new scenarios in the TXTRS R workflow
+and the TXTRS Python workflow, then confirm that both workflows produce the same
+TXTRS results.
+
+This file carries the TXTRS-specific work that was previously Step 4 and Step 5
+in the main scenario testing plan.
+
+## Prerequisites
+
+Before starting this plan:
+
+- baseline TXTRS R and Python results should already match
+- existing TXTRS scenarios should already match between R and Python
+- `asset_shock`, `high_inflation`, and `high_inflation_linked` should be
+  finalized in
+  [`scenario_building_plan`](scenario_building_plan)
+- numeric comparison tolerances should be agreed before reconciliation
+
+## TXTRS Scenarios Covered
+
+- baseline
+- `high_discount`
+- `low_return`
+- `no_cola`
+- `asset_shock`
+- `high_inflation`
+- `high_inflation_linked`
+
+## Implement New TXTRS Scenarios
+
+Implementation tasks:
+
+1. Add `asset_shock` to the TXTRS R scenario workflow.
+2. Add `asset_shock` to the TXTRS Python scenario workflow.
+3. Add `high_inflation` to the TXTRS R scenario workflow.
+4. Add `high_inflation` to the TXTRS Python scenario workflow.
+5. Add `high_inflation_linked` to the TXTRS R scenario workflow.
+6. Add `high_inflation_linked` to the TXTRS Python scenario workflow.
+7. Confirm that both TXTRS workflows expose the new scenarios through their
+   normal scenario-running commands.
+8. Confirm that both TXTRS workflows write outputs to predictable
+   scenario-specific locations.
+
+Acceptance criteria:
+
+- The TXTRS R workflow can run `asset_shock`.
+- The TXTRS Python workflow can run `asset_shock`.
+- The TXTRS R workflow can run `high_inflation`.
+- The TXTRS Python workflow can run `high_inflation`.
+- The TXTRS R workflow can run `high_inflation_linked`.
+- The TXTRS Python workflow can run `high_inflation_linked`.
+- Both workflows use the same scenario definitions and timing.
+
+## Run TXTRS Scenario Comparisons
+
+Comparison tasks:
+
+1. Run baseline in R for TXTRS.
+2. Run baseline in Python for TXTRS.
+3. Compare baseline TXTRS outputs.
+4. Run `high_discount` in R for TXTRS.
+5. Run `high_discount` in Python for TXTRS.
+6. Compare TXTRS `high_discount` outputs.
+7. Run `low_return` in R for TXTRS.
+8. Run `low_return` in Python for TXTRS.
+9. Compare TXTRS `low_return` outputs.
+10. Run `no_cola` in R for TXTRS.
+11. Run `no_cola` in Python for TXTRS.
+12. Compare TXTRS `no_cola` outputs.
+13. Run `asset_shock` in R for TXTRS.
+14. Run `asset_shock` in Python for TXTRS.
+15. Compare TXTRS `asset_shock` outputs.
+16. Run `high_inflation` in R for TXTRS.
+17. Run `high_inflation` in Python for TXTRS.
+18. Compare TXTRS `high_inflation` outputs.
+19. Run `high_inflation_linked` in R for TXTRS.
+20. Run `high_inflation_linked` in Python for TXTRS.
+21. Compare TXTRS `high_inflation_linked` outputs.
+
+## TXTRS Reconciliation Matrix
+
+Prepare a reconciliation matrix with one row per TXTRS scenario.
+
+Required matrix columns:
+
+- plan
+- scenario
+- R output location
+- Python output location
+- comparison status
+- maximum absolute difference
+- maximum percentage difference, where meaningful
+- affected output field, if any difference exceeds tolerance
+- resolution notes
+
+Required rows:
+
+- TXTRS baseline
+- TXTRS `high_discount`
+- TXTRS `low_return`
+- TXTRS `no_cola`
+- TXTRS `asset_shock`
+- TXTRS `high_inflation`
+- TXTRS `high_inflation_linked`
+
+## Final TXTRS Acceptance Criteria
+
+- Every TXTRS scenario comparison passes.
+- Any TXTRS difference is resolved or documented with an approved tolerance.
+- The TXTRS reconciliation matrix clearly shows that R and Python results are
+  the same across baseline, existing scenarios, and new scenarios.

@@ -49,6 +49,7 @@ class FundingContext:
     has_dc: bool
     funding_policy: str
     return_scen_col: str
+    raw_economic: dict
     init_funding: pd.DataFrame
     amort_layers: Optional[pd.DataFrame]
     ret_scen: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -130,6 +131,7 @@ def resolve_funding_context(
         has_dc=has_dc,
         funding_policy=fund.funding_policy,
         return_scen_col=constants.return_scen_col,
+        raw_economic=constants.raw.get("economic", {}),
         init_funding=funding_inputs["init_funding"],
         amort_layers=funding_inputs.get("amort_layers"),
         ret_scen=funding_inputs["return_scenarios"].copy(),
