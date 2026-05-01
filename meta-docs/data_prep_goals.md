@@ -96,6 +96,16 @@ These are the only valid values for `source_type`:
   (e.g., band-to-point active grid).
 - `AV-referenced-external` — value comes from an external table the AV
   explicitly names (e.g., PubT-2010(B) mortality, Scale UMP 2021).
+- `plan-admin-direct` — value transcribed from an authoritative
+  plan-administrator publication that is not the AV: a member benefits
+  handbook published by the plan, an official member-facing page on the
+  plan's website, the plan administrator's published rules, or a
+  governing statute the plan administrator implements verbatim. Used when
+  the AV does not state the value but the plan administrator does, in a
+  publication intended for plan members or the public. Treated as nearly
+  equal to `AV-direct` in reliability but recorded distinctly so we can
+  see what's not in the AV. The source must be cited with URL or
+  document title plus printed-page or PDF-page reference.
 - `estimated` — produced by a documented method registered in
   `prep/common/methods/method_registry.md` because no source publishes the
   value. Prefer reusing an existing registered method over creating a new
